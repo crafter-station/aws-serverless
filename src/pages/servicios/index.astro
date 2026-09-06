@@ -1,0 +1,108 @@
+---
+import { getCollection } from 'astro:content';
+import { Icon } from '@aws-icons/astro';
+import Base from '../../layouts/Base.astro';
+import { patronesQueUsan } from '../../lib/coherencia';
+
+const servicios = (await getCollection('servicios')).sort((a, b) => {
+  if (a.data.estado !== b.data.estado) return a.data.estado === 'listo' ? -1 : 1;
+  return a.data.titulo.localeCompare(b.data.titulo, 'es');
+});
+
+// Cuántos patrones usa cada servicio: se deriva, no se escribe.
+const conUso = await Promise.all(
+  servicios.map(async (s) => ({ s, usos: (await patronesQueUsan(s.id)).length })),
+);
+
+const listos = servicios.filter((s) => s.data.estado === 'listo').length;
+---
+
+<Base
+  titulo="Servicios · aws.crafter.run"
+  descripcion="Fichas de servicios de AWS serverless: qué hace cada uno, sus límites hard y soft, y cómo te factura de verdad."
+  seccion="servicios"
+>
+  <main class="envoltura">
+    <div class="intro">
+      <h1>Servicios</h1>
+      <p class="intro__bajada">
+        El vocabulario. Cada ficha va a lo que la documentación oficial esconde:
+        <strong>los límites que muerden</strong> —marcando cuáles son un muro y
+        cuáles se amplían con un ticket— y <strong>cómo te factura de verdad</strong>.
+      </p>
+      <p class="intro__estado">{listos} de {servicios.length} escritos</p>
+    </div>
+
+    <ul class="rejilla">
+      {conUso.map(({ s, usos }) =>
+        s.data.estado === 'listo' ? (
+          <li class="tarjeta">
+            <a href={`/servicios/${s.id}/`}>
+              <span class="tarjeta__marca">
+                <Icon name={s.data.icono as never} width="36" height="36" />
+                <span class="tarjeta__titulo">{s.data.titulo}</span>
+              </span>
+              <span class="tarjeta__texto">{s.data.en_una_frase}</span>
+              <span class="tarjeta__pie">
+                {usos === 0
+                  ? 'Sin patrones todavía'
+                  : `Aparece en ${usos} ${usos === 1 ? 'patrón' : 'patrones'}`}
+              </span>
+            </a>
+          </li>
+        ) : (
+          <li class="tarjeta tarjeta--pendiente">
+            <span class="tarjeta__marca">
+              <Icon name={s.data.icono as never} width="36" height="36" />
+              <span class="tarjeta__titulo">{s.data.titulo}</span>
+            </span>
+            <span class="tarjeta__pendiente">Por escribir</span>
+          </li>
+        ),
+      )}
+    </ul>
+  </main>
+</Base>
+
+<style>
+  main { padding-bottom: 5rem; }
+
+  .intro { padding: 3.5rem 0 2rem; max-width: 38rem; }
+  .intro h1 {
+    margin: 0; font-size: clamp(2.25rem, 6vw, 3rem);
+    font-weight: 700; letter-spacing: -.03em; line-height: 1.05;
+  }
+  .intro__bajada {
+    margin: 1.25rem 0 0; font-family: var(--serif);
+    font-size: 1.1875rem; line-height: 1.6; color: var(--tinta-suave);
+  }
+  .intro__estado { margin: 1.5rem 0 0; font-size: .8125rem; color: var(--tinta-tenue); }
+
+  .rejilla {
+    display: grid; gap: .875rem; list-style: none; margin: 0; padding: 0;
+    grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  }
+  .tarjeta { border: 1px solid var(--linea); border-radius: var(--radio); background: var(--papel-alto); }
+  .tarjeta a, .tarjeta--pendiente {
+    display: flex; flex-direction: column; gap: .5rem;
+    padding: 1.25rem; height: 100%; text-decoration: none; color: inherit;
+  }
+  .tarjeta a:hover { background: var(--acento-suave); border-radius: var(--radio); }
+  .tarjeta__marca { display: flex; align-items: center; gap: .625rem; }
+  .tarjeta__marca :global(svg) { display: block; flex: none; }
+  .tarjeta__titulo { font-size: 1.125rem; font-weight: 600; letter-spacing: -.01em; }
+  .tarjeta__texto {
+    font-family: var(--serif); font-size: .9375rem; line-height: 1.5; color: var(--tinta-suave);
+  }
+  .tarjeta__pie {
+    margin-top: auto; padding-top: .25rem;
+    font-size: .75rem; color: var(--tinta-tenue);
+  }
+  .tarjeta--pendiente { background: none; border: 1px dashed var(--linea-fuerte); }
+  .tarjeta--pendiente .tarjeta__titulo { color: var(--tinta-tenue); font-weight: 500; }
+  .tarjeta--pendiente :global(svg) { opacity: .5; }
+  .tarjeta__pendiente {
+    margin-top: auto; font-size: .6875rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--linea-fuerte);
+  }
+</style>

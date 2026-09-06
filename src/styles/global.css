@@ -57,3 +57,81 @@ a:hover { text-decoration-thickness: 2px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ── Chrome compartido ──────────────────────────────────────────────────
+   Vive aquí, y no en cada layout, porque lo usan la home, los dos índices
+   y las dos anatomías de ficha.
+*/
+.envoltura { max-width: 60rem; margin: 0 auto; padding: 0 1.5rem; }
+
+.barra {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+  max-width: 60rem; margin: 0 auto; padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--linea);
+}
+.barra__marca {
+  font-weight: 700; font-size: 1rem; letter-spacing: -.01em;
+  color: var(--tinta); text-decoration: none;
+}
+.barra__marca span { color: var(--tinta-tenue); font-weight: 500; }
+.barra__nav { display: flex; gap: 1.25rem; font-size: .875rem; }
+.barra__nav a { color: var(--tinta-suave); text-decoration: none; }
+.barra__nav a:hover { color: var(--acento); }
+.barra__nav a[aria-current] { color: var(--tinta); font-weight: 600; }
+
+.pie {
+  max-width: 60rem; margin: 0 auto; padding: 2rem 1.5rem 3rem;
+  border-top: 1px solid var(--linea);
+  font-size: .8125rem; color: var(--tinta-tenue);
+}
+.pie p { margin: 0; max-width: 44rem; }
+
+.sello {
+  display: inline-block; padding: .25rem .625rem;
+  border: 1px solid var(--linea); border-radius: 999px;
+  font-size: .75rem; color: var(--tinta-tenue); background: var(--papel-alto);
+}
+.sello time { font-variant-numeric: tabular-nums; }
+
+/* ── Prosa ──────────────────────────────────────────────────────────────
+   Serif para el texto largo, sans para la estructura. La medida corta es
+   deliberada: esto se lee despacio.
+*/
+.prosa { max-width: var(--medida); }
+.prosa p, .prosa li { font-family: var(--serif); font-size: 1.125rem; line-height: 1.7; }
+.prosa h2 {
+  margin: 3.5rem 0 1rem; padding-top: 1.75rem;
+  border-top: 1px solid var(--linea);
+  font-size: 1.625rem; font-weight: 700; letter-spacing: -.015em; line-height: 1.25;
+}
+.prosa h3 { margin: 2.5rem 0 .75rem; font-size: 1.1875rem; font-weight: 600; letter-spacing: -.01em; }
+.prosa strong { font-weight: 600; color: var(--tinta); }
+.prosa ul, .prosa ol { padding-left: 1.35rem; }
+.prosa li { margin: .4rem 0; }
+.prosa li::marker { color: var(--tinta-tenue); }
+
+.prosa code {
+  font-family: var(--mono); font-size: .875em;
+  background: var(--papel-hondo); padding: .1em .35em; border-radius: 3px; color: var(--tinta);
+}
+.prosa pre {
+  margin: 1.75rem 0; padding: 1.125rem 1.25rem;
+  border: 1px solid var(--linea); border-radius: var(--radio);
+  overflow-x: auto; font-size: .875rem; line-height: 1.6;
+}
+.prosa pre code { background: none; padding: 0; font-size: inherit; }
+
+.prosa table, .tabla {
+  width: 100%; margin: 1.75rem 0; border-collapse: collapse;
+  font-family: var(--sans); font-size: .9375rem;
+}
+.prosa th, .prosa td, .tabla th, .tabla td {
+  padding: .625rem .75rem; text-align: left;
+  border-bottom: 1px solid var(--linea); vertical-align: top;
+}
+.prosa th, .tabla th {
+  font-size: .75rem; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--tinta-tenue);
+}
+.prosa hr { margin: 3rem 0; border: 0; border-top: 1px solid var(--linea); }

@@ -1,0 +1,16 @@
+---
+import { getCollection, render } from 'astro:content';
+import FichaServicio from '../../layouts/FichaServicio.astro';
+
+export async function getStaticPaths() {
+  const servicios = await getCollection('servicios', (s) => s.data.estado === 'listo');
+  return servicios.map((entrada) => ({ params: { slug: entrada.id }, props: { entrada } }));
+}
+
+const { entrada } = Astro.props;
+const { Content } = await render(entrada);
+---
+
+<FichaServicio entrada={entrada}>
+  <Content />
+</FichaServicio>

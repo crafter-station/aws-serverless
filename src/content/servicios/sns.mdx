@@ -1,0 +1,182 @@
+---
+titulo: SNS
+nombre_completo: Amazon Simple Notification Service
+icono: amazon-simple-notification-service
+estado: listo
+en_una_frase: >-
+  Un altavoz gestionado: publicas un mensaje una vez y SNS entrega una copia
+  a cada suscriptor, sin guardar nada ni esperar a nadie.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: Topic
+    explicacion: >-
+      El punto de reparto. No es un buzón: no almacena mensajes, no tiene
+      profundidad y no puedes leer de él. Si nadie está suscrito cuando
+      publicas, el mensaje se evapora sin error.
+  - termino: Suscripción
+    explicacion: >-
+      El par (topic, destino). Aquí vive casi toda la configuración que importa:
+      la filter policy, el raw message delivery y la DLQ. Cuando algo "no llega",
+      el 90 % de las veces el problema está en la suscripción, no en el topic.
+  - termino: Al menos una vez, sin orden
+    explicacion: >-
+      El contrato de los topics estándar. Un mensaje puede llegar duplicado y
+      puede llegar desordenado. No es un caso degenerado: es el comportamiento
+      normal, y tu consumidor tiene que estar escrito para eso.
+limites:
+  - concepto: Tamaño de mensaje
+    valor: 262 144 bytes (256 KiB)
+    tipo: hard
+    nota: Con las Extended Client Libraries el payload sube a 2 GB apoyándose en S3.
+  - concepto: Cabecera del mensaje
+    valor: 16 384 bytes (16 KiB)
+    tipo: hard
+  - concepto: Mensajes por PublishBatch
+    valor: 10
+    tipo: hard
+  - concepto: Publish por segundo — us-east-1
+    valor: 30 000 msg/s
+    tipo: soft
+  - concepto: Publish por segundo — us-west-2, eu-west-1
+    valor: 9 000 msg/s
+    tipo: soft
+  - concepto: Publish por segundo — resto de regiones
+    valor: 300 msg/s
+    tipo: soft
+    nota: El límite que casi nadie mira. Ohio, Fráncfort, Tokio y seis más van a 1 500.
+  - concepto: Entrega a email
+    valor: 10 msg/s por suscripción
+    tipo: hard
+    nota: AWS lo dice explícitamente — no se puede subir. Para email de producto, SES.
+  - concepto: Suscripciones por topic — estándar
+    valor: 12 500 000
+    tipo: soft
+  - concepto: Suscripciones por topic — FIFO
+    valor: 100
+    tipo: soft
+    nota: Cuatro órdenes de magnitud menos que en estándar. Si necesitas orden, el fan-out ancho deja de ser una opción.
+  - concepto: Topics por cuenta
+    valor: 100 000 estándar · 1 000 FIFO
+    tipo: soft
+  - concepto: Filter policies
+    valor: 200 por topic · 10 000 por cuenta
+    tipo: soft
+  - concepto: Reintentos de entrega a SQS y Lambda
+    valor: 100 015 intentos durante 23 días
+    tipo: hard
+    nota: Las políticas de entrega a endpoints gestionados por AWS no se pueden modificar.
+  - concepto: Tiempo total de reintentos a HTTP/S
+    valor: 3 600 segundos
+    tipo: hard
+---
+
+## Modelo mental
+
+SNS es **un altavoz, no un buzón**.
+
+Esa frase resuelve casi todas las dudas que vas a tener. Un buzón —SQS— guarda
+lo que le echas hasta que alguien lo recoge. Un altavoz emite: quien esté
+escuchando en ese instante lo oye, y quien no, se lo pierde. SNS no tiene
+profundidad, no tiene retención, no tiene "leer el mensaje anterior". Publicas,
+reparte, olvida.
+
+De ahí salen las tres consecuencias que definen cómo se usa:
+
+1. **Si nadie está suscrito, publicar es un no-op silencioso.** `Publish`
+   devuelve `200` y un `MessageId` perfectamente válido. No hay error, no hay
+   aviso, no hay métrica en rojo. Simplemente no pasó nada.
+2. **Si el suscriptor está caído, el mensaje es problema de SNS, no tuyo** — y
+   SNS es sorprendentemente cabezón: a una cola SQS o a una Lambda reintenta
+   **100 015 veces a lo largo de 23 días**. Tres inmediatos, dos separados por un
+   segundo, diez con backoff exponencial hasta 20 segundos, y cien mil más cada
+   20 segundos.
+3. **Si quieres que el mensaje espere**, necesitas un buzón detrás. Por eso el
+   patrón que de verdad se usa no es SNS a Lambda, sino **SNS a SQS a Lambda**.
+
+Ese punto 2 tiene una consecuencia práctica que casi nadie deduce: la **DLQ de
+la suscripción SNS no te va a salvar de nada** cuando el destino es una cola.
+Para que dispare, SNS tendría que fracasar 100 015 veces seguidas durante más de
+tres semanas, y eso solo pasa si la cola no existe o los permisos están rotos —
+es decir, un error de infraestructura, no de tu código.
+
+## Cómo te factura
+
+Se paga por **peticiones a la API**, no por mensajes entregados:
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| Publicaciones (topics estándar) | ~0,50 USD / millón |
+| Primer millón de peticiones al mes | gratis |
+| Entregas a SQS, Lambda y Firehose | **sin coste de entrega** |
+| Entregas a email, SMS o push | se facturan aparte, y caro |
+
+La forma de la factura importa más que el número: **el reparto es prácticamente
+gratis**. Un topic con seis suscripciones SQS cuesta lo mismo que uno con una,
+porque las entregas a servicios gestionados de AWS no llevan cargo. Lo que
+cuesta es lo que hay *detrás* de cada suscripción — las peticiones de SQS y las
+invocaciones de Lambda que provoca.
+
+Dicho de otro modo: cuando añades un consumidor a un fan-out, la línea de SNS de
+tu factura no se mueve. Se mueven las de SQS y Lambda.
+
+Como en SQS, **el tamaño factura**: la publicación se cobra por porciones de
+64 KB, así que un mensaje de 256 KB cuenta como cuatro peticiones, no como una.
+Un evento gordo cuesta cuatro veces más que un evento con una referencia a S3.
+
+## Cuándo NO usarlo
+
+- **Necesitas repetir el pasado.** Los topics estándar no archivan nada. Un
+  consumidor con un bug de tres días pierde tres días de eventos y no hay forma
+  de recuperarlos. Eso es EventBridge (archive y replay) o Kinesis (retención).
+- **Necesitas orden.** Los topics FIFO existen, pero bajan a 100 suscripciones
+  por topic y menos throughput. Si el orden es el requisito central, casi
+  siempre quieres Kinesis o SQS FIFO directo.
+- **Necesitas enrutar por el contenido con reglas ricas.** Las filter policies
+  hacen igualdad, prefijos, rangos numéricos y listas sobre atributos. En cuanto
+  la regla es "si el importe supera el límite del cliente", eso es EventBridge.
+- **Solo hay un consumidor.** Un topic delante de una única cola es una pieza
+  más que mantener, un permiso más que configurar y un sobre más que desenvolver
+  a cambio de exactamente nada. Publica a la cola.
+- **Quieres mandar emails de producto.** SNS entrega email a 10 por segundo por
+  suscripción y es un límite duro, sin plantillas, sin métricas de apertura y
+  sin gestión de rebotes. Eso es SES.
+- **El mensaje no cabe en 256 KB.** Manda el hecho y una referencia a S3.
+
+## Errores comunes
+
+**Suscribir la Lambda directamente al topic.** Funciona en la demo y pierde
+mensajes en producción: cuando tu función falla y agota los reintentos, el
+mensaje se descarta. Mete siempre una cola en medio salvo que perder el evento
+te dé igual de verdad.
+
+**Olvidar la política de recursos de la cola.** Crear la suscripción no da
+permiso a SNS para escribir en SQS. Sin ese permiso todo parece correcto —
+suscripción confirmada, `Publish` con `200`— y los mensajes no llegan. La única
+señal es la métrica `NumberOfNotificationsFailed`, que nadie está mirando.
+Y pon la condición `aws:SourceArn`: sin ella, cualquier topic de cualquier
+cuenta puede escribir en tu cola.
+
+**Dejar apagado el raw message delivery.** Por defecto el consumidor no recibe
+tu mensaje, sino un sobre JSON con tu payload convertido en un *string* dentro
+del campo `Message`. Es la primera hora perdida de todo el que empieza con SNS.
+
+**Filtrar por el cuerpo del mensaje sin declarar el ámbito.** Las filter policies
+miran los `MessageAttributes`, no el cuerpo, salvo que declares explícitamente
+`MessageBody` como ámbito de filtrado en la suscripción.
+
+**Confiar en la DLQ de la suscripción.** Como se explica arriba, con destinos
+SQS casi nunca dispara. La DLQ que atrapa tus bugs es la redrive policy de la
+cola.
+
+**Asumir que tu región aguanta.** Si no estás en Virginia, Oregón o Irlanda, tu
+techo de publicación puede ser de 1 500 msg/s — o de **300**. Es ampliable con
+un ticket, pero hay que pedirlo antes del pico, no durante.
+
+## Fuentes
+
+Cuotas, distinción hard/soft y throughput por región:
+[Amazon SNS endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/sns.html).
+Política de reintentos y sus cuatro fases:
+[Amazon SNS message delivery retries](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html).
+Las cifras de precio proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente: trátalas como orden de magnitud.

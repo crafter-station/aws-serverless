@@ -1,0 +1,55 @@
+---
+import '../styles/global.css';
+import Defs from '../components/diagrama/Defs.astro';
+
+interface Props {
+  titulo: string;
+  descripcion: string;
+  /** Marca la pestaña activa en la barra. */
+  seccion?: 'servicios' | 'patrones';
+}
+const { titulo, descripcion, seccion } = Astro.props;
+---
+
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{titulo}</title>
+    <meta name="description" content={descripcion} />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+  </head>
+
+  <body>
+    {/* Marcadores de flecha compartidos: un solo id por documento. */}
+    <Defs />
+
+    <header class="barra">
+      <a class="barra__marca" href="/">aws<span>.crafter.run</span></a>
+      <nav class="barra__nav">
+        <a href="/servicios/" aria-current={seccion === 'servicios' ? 'page' : undefined}>
+          Servicios
+        </a>
+        <a href="/patrones/" aria-current={seccion === 'patrones' ? 'page' : undefined}>
+          Patrones
+        </a>
+      </nav>
+    </header>
+
+    <slot />
+
+    <footer class="pie">
+      <p>
+        Los iconos de arquitectura son © Amazon Web Services, Inc., usados sin
+        modificación bajo los
+        <a href="https://aws.amazon.com/architecture/icons/">términos de AWS</a>.
+      </p>
+    </footer>
+  </body>
+</html>

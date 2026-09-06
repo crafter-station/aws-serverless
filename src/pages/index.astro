@@ -1,221 +1,156 @@
 ---
-import '../styles/global.css';
+import { getCollection } from 'astro:content';
 import { Icon } from '@aws-icons/astro';
+import Base from '../layouts/Base.astro';
 
-// Catálogo v1. Lo que aún no está escrito se muestra igualmente: un catálogo
-// que enseña su propio hueco es más honesto que uno que finge estar completo.
-const patrones = [
-  {
-    slug: 'fan-out',
-    titulo: 'Fan-out',
-    familia: 'Comunicación',
-    resumen:
-      'Un productor emite un hecho y varios consumidores independientes reaccionan en paralelo, sin que el productor sepa quiénes son.',
-    listo: true,
-  },
-  { titulo: 'Idempotencia en consumidores', familia: 'Fiabilidad', listo: false },
-  { titulo: 'DLQ y redrive', familia: 'Fiabilidad', listo: false },
-  { titulo: 'Outbox con DynamoDB Streams', familia: 'Fiabilidad', listo: false },
-  { titulo: 'Saga orquestada con Step Functions', familia: 'Fiabilidad', listo: false },
-  { titulo: 'Single-table design', familia: 'Datos', listo: false },
-  { titulo: 'Cold start', familia: 'Escala', listo: false },
-  { titulo: 'Presigned URLs', familia: 'Frontera', listo: false },
-];
+// Todo sale de las colecciones: la home no puede desincronizarse del catálogo.
+const patrones = await getCollection('patrones');
+const servicios = await getCollection('servicios');
 
-const servicios = [
-  { icono: 'aws-lambda', nombre: 'Lambda' },
-  { icono: 'amazon-api-gateway', nombre: 'API Gateway' },
-  { icono: 'amazon-dynamo-db', nombre: 'DynamoDB' },
-  { icono: 'amazon-simple-queue-service', nombre: 'SQS' },
-  { icono: 'amazon-simple-notification-service', nombre: 'SNS' },
-  { icono: 'amazon-event-bridge', nombre: 'EventBridge' },
-];
+const ordenar = <T extends { data: { estado: string; titulo: string } }>(xs: T[]) =>
+  [...xs].sort((a, b) => {
+    if (a.data.estado !== b.data.estado) return a.data.estado === 'listo' ? -1 : 1;
+    return a.data.titulo.localeCompare(b.data.titulo, 'es');
+  });
 
-const escritos = patrones.filter((p) => p.listo).length;
+const destacados = ordenar(patrones).slice(0, 6);
+const escritos = patrones.filter((p) => p.data.estado === 'listo').length;
+const serviciosOrdenados = ordenar(servicios);
 ---
 
-<html lang="es">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>aws.crafter.run · AWS Serverless y System Design, explicado</title>
-    <meta
-      name="description"
-      content="Catálogo en español de patrones de AWS Serverless y system design: cuándo usar cada cosa, cuándo no, y qué te va a morder."
-    />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap"
-    />
-  </head>
-
-  <body>
-    <header class="barra">
-      <a class="barra__marca" href="/">aws<span>.crafter.run</span></a>
-      <nav class="barra__nav">
-        <a href="/servicios">Servicios</a>
-        <a href="/patrones">Patrones</a>
-      </nav>
-    </header>
-
-    <main>
-      <section class="hero">
-        <h1>AWS Serverless, explicado por lo que importa.</h1>
-        <p class="hero__bajada">
-          No otra referencia de servicios: un catálogo de <strong>decisiones</strong>.
-          Cada patrón dice cuándo usarlo, cuándo <em>no</em>, y qué te va a morder
-          cuando llegue el pico. En español, con diagramas y sin humo.
-        </p>
-        <p class="hero__estado">
-          Archivo de aprendizaje en construcción · {escritos} de {patrones.length} patrones escritos
-        </p>
-      </section>
-
-      <section class="bloque">
-        <h2 class="bloque__titulo">Patrones</h2>
-        <p class="bloque__nota">La gramática: cómo se combinan las piezas.</p>
-
-        <ul class="rejilla">
-          {patrones.map((p) =>
-            p.listo ? (
-              <li class="tarjeta">
-                <a href={`/patrones/${p.slug}/`}>
-                  <span class="tarjeta__familia">{p.familia}</span>
-                  <span class="tarjeta__titulo">{p.titulo}</span>
-                  <span class="tarjeta__resumen">{p.resumen}</span>
-                </a>
-              </li>
-            ) : (
-              <li class="tarjeta tarjeta--pendiente">
-                <span class="tarjeta__familia">{p.familia}</span>
-                <span class="tarjeta__titulo">{p.titulo}</span>
-                <span class="tarjeta__pendiente">Por escribir</span>
-              </li>
-            ),
-          )}
-        </ul>
-      </section>
-
-      <section class="bloque">
-        <h2 class="bloque__titulo">Servicios</h2>
-        <p class="bloque__nota">
-          El vocabulario: qué hace cada uno, sus límites duros y cómo te factura.
-        </p>
-
-        <ul class="servicios">
-          {servicios.map((s) => (
-            <li class="servicio">
-              <Icon name={s.icono as never} width="26" height="26" />
-              <span>{s.nombre}</span>
-              <span class="servicio__pendiente">Por escribir</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-    </main>
-
-    <footer class="pie">
-      <p>
-        Los iconos de arquitectura son © Amazon Web Services, Inc., usados sin
-        modificación bajo los
-        <a href="https://aws.amazon.com/architecture/icons/">términos de AWS</a>.
+<Base
+  titulo="aws.crafter.run · AWS Serverless y System Design, explicado"
+  descripcion="Catálogo en español de patrones de AWS Serverless y system design: cuándo usar cada cosa, cuándo no, y qué te va a morder."
+>
+  <main class="envoltura">
+    <section class="hero">
+      <h1>AWS Serverless, explicado por lo que importa.</h1>
+      <p class="hero__bajada">
+        No otra referencia de servicios: un catálogo de <strong>decisiones</strong>.
+        Cada patrón dice cuándo usarlo, cuándo <em>no</em>, y qué te va a morder
+        cuando llegue el pico. En español, con diagramas y sin humo.
       </p>
-    </footer>
+      <p class="hero__estado">
+        Archivo de aprendizaje en construcción · {escritos} de {patrones.length} patrones escritos
+      </p>
+    </section>
 
-    <style>
-      .barra {
-        display: flex; align-items: center; justify-content: space-between;
-        gap: 1rem; flex-wrap: wrap;
-        max-width: 60rem; margin: 0 auto; padding: 1.25rem 1.5rem;
-        border-bottom: 1px solid var(--linea);
-      }
-      .barra__marca {
-        font-weight: 700; font-size: 1rem; letter-spacing: -.01em;
-        color: var(--tinta); text-decoration: none;
-      }
-      .barra__marca span { color: var(--tinta-tenue); font-weight: 500; }
-      .barra__nav { display: flex; gap: 1.25rem; font-size: .875rem; }
-      .barra__nav a { color: var(--tinta-suave); text-decoration: none; }
-      .barra__nav a:hover { color: var(--acento); }
+    <section class="bloque">
+      <div class="bloque__cabeza">
+        <h2 class="bloque__titulo">Patrones</h2>
+        <a class="bloque__enlace" href="/patrones/">Ver los {patrones.length} →</a>
+      </div>
+      <p class="bloque__nota">La gramática: cómo se combinan las piezas.</p>
 
-      main { max-width: 60rem; margin: 0 auto; padding: 0 1.5rem; }
+      <ul class="rejilla">
+        {destacados.map((p) =>
+          p.data.estado === 'listo' ? (
+            <li class="tarjeta">
+              <a href={`/patrones/${p.id}/`}>
+                <span class="tarjeta__familia">{p.data.familia}</span>
+                <span class="tarjeta__titulo">{p.data.titulo}</span>
+                <span class="tarjeta__texto">{p.data.intencion}</span>
+              </a>
+            </li>
+          ) : (
+            <li class="tarjeta tarjeta--pendiente">
+              <span class="tarjeta__familia">{p.data.familia}</span>
+              <span class="tarjeta__titulo">{p.data.titulo}</span>
+              <span class="tarjeta__pendiente">Por escribir</span>
+            </li>
+          ),
+        )}
+      </ul>
+    </section>
 
-      .hero { padding: 4.5rem 0 3.5rem; max-width: 40rem; }
-      .hero h1 {
-        margin: 0; font-size: clamp(2.25rem, 6vw, 3.5rem); line-height: 1.08;
-        font-weight: 700; letter-spacing: -.03em;
-      }
-      .hero__bajada {
-        margin: 1.5rem 0 0; font-family: var(--serif);
-        font-size: 1.25rem; line-height: 1.6; color: var(--tinta-suave);
-      }
-      .hero__estado {
-        margin: 2rem 0 0; font-size: .8125rem; color: var(--tinta-tenue);
-      }
+    <section class="bloque">
+      <div class="bloque__cabeza">
+        <h2 class="bloque__titulo">Servicios</h2>
+        <a class="bloque__enlace" href="/servicios/">Ver los {servicios.length} →</a>
+      </div>
+      <p class="bloque__nota">
+        El vocabulario: qué hace cada uno, sus límites duros y cómo te factura.
+      </p>
 
-      .bloque { padding: 2.5rem 0; border-top: 1px solid var(--linea); }
-      .bloque__titulo {
-        margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em;
-      }
-      .bloque__nota {
-        margin: .375rem 0 1.75rem; font-size: .9375rem; color: var(--tinta-tenue);
-      }
+      <ul class="servicios">
+        {serviciosOrdenados.map((s) => {
+          const listo = s.data.estado === 'listo';
+          const Etiqueta = listo ? 'a' : 'span';
+          return (
+            <li>
+              <Etiqueta
+                class={listo ? 'servicio' : 'servicio servicio--pendiente'}
+                href={listo ? `/servicios/${s.id}/` : undefined}
+              >
+                <Icon name={s.data.icono as never} width="26" height="26" />
+                <span>{s.data.titulo}</span>
+                {!listo && <span class="servicio__pendiente">Por escribir</span>}
+              </Etiqueta>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  </main>
+</Base>
 
-      .rejilla {
-        display: grid; gap: .875rem; list-style: none; margin: 0; padding: 0;
-        grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-      }
-      .tarjeta {
-        border: 1px solid var(--linea); border-radius: var(--radio);
-        background: var(--papel-alto);
-      }
-      .tarjeta a, .tarjeta--pendiente {
-        display: flex; flex-direction: column; gap: .35rem;
-        padding: 1.125rem 1.25rem; height: 100%;
-        text-decoration: none; color: inherit;
-      }
-      .tarjeta a:hover { background: var(--acento-suave); border-radius: var(--radio); }
-      .tarjeta__familia {
-        font-size: .6875rem; font-weight: 700; letter-spacing: .08em;
-        text-transform: uppercase; color: var(--acento);
-      }
-      .tarjeta__titulo { font-size: 1.0625rem; font-weight: 600; letter-spacing: -.01em; }
-      .tarjeta__resumen {
-        font-family: var(--serif); font-size: .9375rem; line-height: 1.5;
-        color: var(--tinta-suave);
-      }
-      .tarjeta--pendiente {
-        background: none; border-style: dashed;
-        border: 1px dashed var(--linea-fuerte); border-radius: var(--radio);
-      }
-      .tarjeta--pendiente .tarjeta__familia,
-      .tarjeta--pendiente .tarjeta__titulo { color: var(--tinta-tenue); }
-      .tarjeta__pendiente, .servicio__pendiente {
-        margin-top: auto; font-size: .6875rem; letter-spacing: .06em;
-        text-transform: uppercase; color: var(--linea-fuerte);
-      }
+<style>
+  main { padding-bottom: 4rem; }
 
-      .servicios {
-        display: flex; flex-wrap: wrap; gap: .625rem;
-        list-style: none; margin: 0; padding: 0;
-      }
-      .servicio {
-        display: inline-flex; align-items: center; gap: .5rem;
-        padding: .5rem .875rem .5rem .5rem;
-        border: 1px dashed var(--linea-fuerte); border-radius: 999px;
-        font-size: .9375rem; color: var(--tinta-suave);
-      }
-      .servicio :global(svg) { display: block; flex: none; opacity: .55; }
-      .servicio__pendiente { margin: 0 0 0 .25rem; }
+  .hero { padding: 4.5rem 0 3.5rem; max-width: 40rem; }
+  .hero h1 {
+    margin: 0; font-size: clamp(2.25rem, 6vw, 3.5rem); line-height: 1.08;
+    font-weight: 700; letter-spacing: -.03em;
+  }
+  .hero__bajada {
+    margin: 1.5rem 0 0; font-family: var(--serif);
+    font-size: 1.25rem; line-height: 1.6; color: var(--tinta-suave);
+  }
+  .hero__estado { margin: 2rem 0 0; font-size: .8125rem; color: var(--tinta-tenue); }
 
-      .pie {
-        max-width: 60rem; margin: 0 auto; padding: 2rem 1.5rem 3rem;
-        border-top: 1px solid var(--linea);
-        font-size: .8125rem; color: var(--tinta-tenue);
-      }
-      .pie p { margin: 0; max-width: 44rem; }
-    </style>
-  </body>
-</html>
+  .bloque { padding: 2.5rem 0; border-top: 1px solid var(--linea); }
+  .bloque__cabeza { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+  .bloque__titulo { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; }
+  .bloque__enlace { font-size: .875rem; text-decoration: none; }
+  .bloque__enlace:hover { text-decoration: underline; }
+  .bloque__nota { margin: .375rem 0 1.75rem; font-size: .9375rem; color: var(--tinta-tenue); }
+
+  .rejilla {
+    display: grid; gap: .875rem; list-style: none; margin: 0; padding: 0;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  }
+  .tarjeta { border: 1px solid var(--linea); border-radius: var(--radio); background: var(--papel-alto); }
+  .tarjeta a, .tarjeta--pendiente {
+    display: flex; flex-direction: column; gap: .35rem;
+    padding: 1.125rem 1.25rem; height: 100%; text-decoration: none; color: inherit;
+  }
+  .tarjeta a:hover { background: var(--acento-suave); border-radius: var(--radio); }
+  .tarjeta__familia {
+    font-size: .6875rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--acento);
+  }
+  .tarjeta__titulo { font-size: 1.0625rem; font-weight: 600; letter-spacing: -.01em; }
+  .tarjeta__texto {
+    font-family: var(--serif); font-size: .9375rem; line-height: 1.5; color: var(--tinta-suave);
+  }
+  .tarjeta--pendiente { background: none; border: 1px dashed var(--linea-fuerte); }
+  .tarjeta--pendiente .tarjeta__familia,
+  .tarjeta--pendiente .tarjeta__titulo { color: var(--tinta-tenue); }
+  .tarjeta__pendiente, .servicio__pendiente {
+    margin-top: auto; font-size: .6875rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--linea-fuerte);
+  }
+
+  .servicios { display: flex; flex-wrap: wrap; gap: .625rem; list-style: none; margin: 0; padding: 0; }
+  .servicio {
+    display: inline-flex; align-items: center; gap: .5rem;
+    padding: .5rem .875rem .5rem .5rem;
+    border: 1px solid var(--linea); border-radius: 999px; background: var(--papel-alto);
+    font-size: .9375rem; color: var(--tinta-suave); text-decoration: none;
+  }
+  a.servicio:hover { border-color: var(--acento); color: var(--acento); }
+  .servicio--pendiente { border-style: dashed; border-color: var(--linea-fuerte); background: none; }
+  .servicio :global(svg) { display: block; flex: none; }
+  .servicio--pendiente :global(svg) { opacity: .5; }
+  .servicio__pendiente { margin: 0 0 0 .25rem; }
+</style>

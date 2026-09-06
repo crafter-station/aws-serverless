@@ -1,0 +1,18 @@
+---
+import { getCollection, render } from 'astro:content';
+import FichaPatron from '../../layouts/FichaPatron.astro';
+
+export async function getStaticPaths() {
+  // Los esbozos no tienen página propia: aparecen en el índice y como destino
+  // de una relación, pero no fingen ser contenido.
+  const patrones = await getCollection('patrones', (p) => p.data.estado === 'listo');
+  return patrones.map((entrada) => ({ params: { slug: entrada.id }, props: { entrada } }));
+}
+
+const { entrada } = Astro.props;
+const { Content } = await render(entrada);
+---
+
+<FichaPatron entrada={entrada}>
+  <Content />
+</FichaPatron>

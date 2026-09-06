@@ -1,0 +1,113 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import { FAMILIAS } from '../../content.config';
+import { verificarCatalogo } from '../../lib/coherencia';
+
+// El único sitio donde se llama. Si el catálogo es incoherente —falta una
+// sección obligatoria, una relación no vuelve— el build se cae aquí y no
+// llega a desplegarse nada.
+await verificarCatalogo();
+
+const patrones = await getCollection('patrones');
+const porFamilia = FAMILIAS.map((familia) => ({
+  familia,
+  fichas: patrones
+    .filter((p) => p.data.familia === familia)
+    .sort((a, b) => {
+      if (a.data.estado !== b.data.estado) return a.data.estado === 'listo' ? -1 : 1;
+      return a.data.titulo.localeCompare(b.data.titulo, 'es');
+    }),
+})).filter((g) => g.fichas.length > 0);
+
+const listos = patrones.filter((p) => p.data.estado === 'listo').length;
+---
+
+<Base
+  titulo="Patrones · aws.crafter.run"
+  descripcion="Catálogo de patrones de AWS serverless y system design: cuándo usar cada uno, cuándo no, y qué te va a morder."
+  seccion="patrones"
+>
+  <main class="envoltura">
+    <div class="intro">
+      <h1>Patrones</h1>
+      <p class="intro__bajada">
+        La gramática: cómo se combinan las piezas. Cada ficha dice cuándo usar el
+        patrón, <strong>cuándo no</strong>, y qué te va a morder en producción.
+      </p>
+      <p class="intro__estado">{listos} de {patrones.length} escritos</p>
+    </div>
+
+    {porFamilia.map((g) => (
+      <section class="familia">
+        <h2 class="familia__titulo">{g.familia}</h2>
+        <ul class="rejilla">
+          {g.fichas.map((p) =>
+            p.data.estado === 'listo' ? (
+              <li class="tarjeta">
+                <a href={`/patrones/${p.id}/`}>
+                  <span class="tarjeta__titulo">{p.data.titulo}</span>
+                  {p.data.alias && <span class="tarjeta__alias">{p.data.alias}</span>}
+                  <span class="tarjeta__texto">{p.data.intencion}</span>
+                </a>
+              </li>
+            ) : (
+              <li class="tarjeta tarjeta--pendiente">
+                <span class="tarjeta__titulo">{p.data.titulo}</span>
+                <span class="tarjeta__pendiente">Por escribir</span>
+              </li>
+            ),
+          )}
+        </ul>
+      </section>
+    ))}
+  </main>
+</Base>
+
+<style>
+  main { padding-bottom: 5rem; }
+
+  .intro { padding: 3.5rem 0 1rem; max-width: 38rem; }
+  .intro h1 {
+    margin: 0; font-size: clamp(2.25rem, 6vw, 3rem);
+    font-weight: 700; letter-spacing: -.03em; line-height: 1.05;
+  }
+  .intro__bajada {
+    margin: 1.25rem 0 0; font-family: var(--serif);
+    font-size: 1.1875rem; line-height: 1.6; color: var(--tinta-suave);
+  }
+  .intro__estado { margin: 1.5rem 0 0; font-size: .8125rem; color: var(--tinta-tenue); }
+
+  .familia { margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid var(--linea); }
+  .familia__titulo {
+    margin: 0 0 1.25rem; font-size: .75rem; font-weight: 700;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--acento);
+  }
+
+  .rejilla {
+    display: grid; gap: .875rem; list-style: none; margin: 0; padding: 0;
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  }
+  .tarjeta {
+    border: 1px solid var(--linea); border-radius: var(--radio); background: var(--papel-alto);
+  }
+  .tarjeta a, .tarjeta--pendiente {
+    display: flex; flex-direction: column; gap: .25rem;
+    padding: 1.125rem 1.25rem; height: 100%; text-decoration: none; color: inherit;
+  }
+  .tarjeta a:hover { background: var(--acento-suave); border-radius: var(--radio); }
+  .tarjeta__titulo { font-size: 1.0625rem; font-weight: 600; letter-spacing: -.01em; }
+  .tarjeta__alias { font-size: .8125rem; color: var(--tinta-tenue); }
+  .tarjeta__texto {
+    margin-top: .35rem; font-family: var(--serif);
+    font-size: .9375rem; line-height: 1.5; color: var(--tinta-suave);
+  }
+  .tarjeta--pendiente {
+    background: none; border: 1px dashed var(--linea-fuerte); border-radius: var(--radio);
+  }
+  .tarjeta--pendiente .tarjeta__titulo { color: var(--tinta-tenue); font-weight: 500; }
+  .tarjeta__pendiente {
+    margin-top: auto; font-size: .6875rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--linea-fuerte);
+  }
+</style>

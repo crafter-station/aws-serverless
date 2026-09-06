@@ -1,0 +1,187 @@
+---
+import { getEntries, type CollectionEntry } from 'astro:content';
+import { Icon } from '@aws-icons/astro';
+import Base from './Base.astro';
+
+interface Props {
+  entrada: CollectionEntry<'patrones'>;
+}
+const { entrada } = Astro.props;
+const d = entrada.data;
+
+// Las referencias se resuelven aquí: la ficha declara slugs, la plantilla
+// saca de la colección el icono y el título de verdad. Renombrar un servicio
+// se hace en un sitio.
+const servicios = d.servicios ? await getEntries(d.servicios) : [];
+
+const relacionados = d.relacionados
+  ? await Promise.all(
+      d.relacionados.map(async (r) => ({
+        ...r,
+        destino: (await getEntries([r.patron]))[0],
+      })),
+    )
+  : [];
+
+const ESCALONES = ['Directo', 'Intermedio', 'Delicado'];
+---
+
+<Base
+  titulo={`${d.titulo} · aws.crafter.run`}
+  descripcion={d.intencion ?? d.titulo}
+  seccion="patrones"
+>
+  <main class="envoltura">
+    <div class="cabecera">
+      <p class="cabecera__familia">{d.familia}</p>
+      <h1 class="cabecera__titulo">{d.titulo}</h1>
+      {d.alias && <p class="cabecera__alias">También llamado <em>{d.alias}</em></p>}
+      {d.intencion && <p class="cabecera__intencion">{d.intencion}</p>}
+
+      <div class="cabecera__meta">
+        {servicios.length > 0 && (
+          <div class="fila">
+            <span class="fila__rotulo">Servicios</span>
+            <ul class="fila__lista">
+              {servicios.map((s) => (
+                <li>
+                  <a
+                    class="chip"
+                    href={s.data.estado === 'listo' ? `/servicios/${s.id}/` : undefined}
+                    aria-disabled={s.data.estado !== 'listo' ? 'true' : undefined}
+                  >
+                    <Icon name={s.data.icono as never} width="22" height="22" />
+                    <span>{s.data.titulo}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div class="cabecera__sellos">
+          {d.dificultad && <span class="sello">{ESCALONES[d.dificultad - 1]}</span>}
+          {d.verificado_en && (
+            <span class="sello">
+              Verificado el <time datetime={d.verificado_en}>{d.verificado_en}</time>
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+
+    <article class="prosa cuerpo">
+      <slot />
+    </article>
+
+    {relacionados.length > 0 && (
+      <section class="relacionados">
+        <h2 class="relacionados__titulo">Patrones relacionados</h2>
+        <p class="relacionados__nota">
+          Un enlace sin la relación nombrada es un "ver también". Aquí cada uno
+          dice qué relación tiene y por qué.
+        </p>
+        <ul class="relacionados__lista">
+          {relacionados.map((r) => (
+            <li class="rel">
+              <div class="rel__cabeza">
+                <span class="rel__tipo">{r.tipo}</span>
+                {r.destino.data.estado === 'listo' ? (
+                  <a class="rel__nombre" href={`/patrones/${r.destino.id}/`}>
+                    {r.destino.data.titulo}
+                  </a>
+                ) : (
+                  <span class="rel__nombre rel__nombre--pendiente">
+                    {r.destino.data.titulo} <span class="rel__pendiente">por escribir</span>
+                  </span>
+                )}
+              </div>
+              <p class="rel__porque">{r.porque}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {d.lab && (
+      <section class="lab">
+        <h2 class="lab__titulo">Laboratorio</h2>
+        <p>
+          <a href={d.lab.repo}>Desplegable en tu cuenta</a> ·
+          en reposo cuesta {d.lab.coste_en_reposo} ·
+          {d.lab.seguro_en_free_tier ? ' entra en free tier' : ' vigila la factura'}
+        </p>
+      </section>
+    )}
+  </main>
+</Base>
+
+<style>
+  .cabecera { padding: 3.5rem 0 2rem; border-bottom: 1px solid var(--linea); }
+  .cabecera__familia {
+    margin: 0 0 .75rem; font-size: .75rem; font-weight: 700;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--acento);
+  }
+  .cabecera__titulo {
+    margin: 0; font-size: clamp(2.25rem, 6vw, 3.25rem); line-height: 1.08;
+    font-weight: 700; letter-spacing: -.025em;
+  }
+  .cabecera__alias { margin: .625rem 0 0; font-size: .9375rem; color: var(--tinta-tenue); }
+  .cabecera__alias em { font-style: normal; font-weight: 600; color: var(--tinta-suave); }
+  .cabecera__intencion {
+    max-width: 36rem; margin: 1.5rem 0 0;
+    font-family: var(--serif); font-size: 1.3125rem; line-height: 1.55; color: var(--tinta-suave);
+  }
+  .cabecera__meta {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 1rem 2rem; flex-wrap: wrap; margin-top: 2rem;
+  }
+  .cabecera__sellos { display: flex; gap: .5rem; flex-wrap: wrap; }
+
+  .fila { display: flex; gap: .875rem; align-items: baseline; flex-wrap: wrap; }
+  .fila__rotulo {
+    font-size: .6875rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--tinta-tenue);
+  }
+  .fila__lista { display: flex; flex-wrap: wrap; gap: .5rem; list-style: none; margin: 0; padding: 0; }
+  .chip {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .25rem .625rem .25rem .3rem;
+    background: var(--papel-alto); border: 1px solid var(--linea);
+    border-radius: 999px; font-size: .8125rem; color: var(--tinta-suave); text-decoration: none;
+  }
+  a.chip:hover { border-color: var(--acento); color: var(--acento); }
+  .chip[aria-disabled] { border-style: dashed; color: var(--tinta-tenue); }
+  .chip :global(svg) { display: block; flex: none; }
+  .chip[aria-disabled] :global(svg) { opacity: .5; }
+
+  .cuerpo { padding: 1rem 0 0; }
+
+  .relacionados { max-width: var(--medida); margin-top: 3.5rem; padding-top: 1.75rem; border-top: 1px solid var(--linea); }
+  .relacionados__titulo { margin: 0; font-size: 1.625rem; font-weight: 700; letter-spacing: -.015em; }
+  .relacionados__nota { margin: .5rem 0 1.75rem; font-size: .9375rem; color: var(--tinta-tenue); }
+  .relacionados__lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .75rem; }
+  .rel {
+    padding: 1rem 1.125rem; background: var(--papel-alto);
+    border: 1px solid var(--linea); border-radius: var(--radio);
+  }
+  .rel__cabeza { display: flex; align-items: baseline; gap: .625rem; flex-wrap: wrap; }
+  .rel__tipo {
+    font-size: .6875rem; font-weight: 700; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--acento);
+  }
+  .rel__nombre { font-size: 1.0625rem; font-weight: 600; color: var(--tinta); }
+  .rel__nombre--pendiente { color: var(--tinta-tenue); font-weight: 500; }
+  .rel__pendiente {
+    font-size: .6875rem; letter-spacing: .06em; text-transform: uppercase; color: var(--linea-fuerte);
+  }
+  .rel__porque {
+    margin: .4rem 0 0; font-family: var(--serif); font-size: 1rem;
+    line-height: 1.55; color: var(--tinta-suave);
+  }
+
+  .lab { max-width: var(--medida); margin-top: 3rem; }
+  .lab__titulo { font-size: 1.25rem; font-weight: 700; }
+
+  main { padding-bottom: 5rem; }
+</style>

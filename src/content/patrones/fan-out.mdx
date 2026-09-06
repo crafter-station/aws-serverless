@@ -1,16 +1,40 @@
 ---
-layout: ../../layouts/Ficha.astro
 titulo: Fan-out
-alias: Fan-out / publish–subscribe
+alias: Fan-out / publish-subscribe
 familia: Comunicación
+estado: listo
 dificultad: 1
 intencion: Un productor emite un hecho una sola vez y varios consumidores independientes reaccionan a él en paralelo, sin que el productor sepa cuántos son ni qué hacen.
 verificado_en: "2026-09-06"
-servicios:
-  - { icono: amazon-simple-notification-service, nombre: SNS }
-  - { icono: amazon-simple-queue-service, nombre: SQS }
-  - { icono: aws-lambda, nombre: Lambda }
-  - { icono: amazon-event-bridge, nombre: EventBridge }
+servicios: [sns, sqs, lambda, eventbridge]
+relacionados:
+  - patron: idempotencia-en-consumidores
+    tipo: requiere
+    porque: >-
+      No es un complemento recomendable: fan-out garantiza duplicados, así que
+      sin idempotencia el patrón está roto por construcción.
+  - patron: dlq-y-redrive
+    tipo: se combina con
+    porque: >-
+      Una por cola, siempre. La redrive policy de SQS atrapa el fallo del
+      consumidor, que es de donde vienen casi todos.
+  - patron: claim-check
+    tipo: se combina con
+    porque: Cuando el evento no cabe en los 256 KB que admite SNS.
+  - patron: pubsub-con-eventbridge
+    tipo: compite con
+    porque: >-
+      Mismo problema, distinto reparto de fuerzas: EventBridge da reglas de
+      enrutado ricas, archivo y replay a cambio de más latencia y menos
+      throughput. Si necesitas replay, la decisión ya está tomada.
+  - patron: cola-punto-a-punto
+    tipo: compite con
+    porque: Con un solo consumidor SNS sobra, y es una pieza que mantener a cambio de nada.
+  - patron: saga-por-coreografia
+    tipo: se construye encima de
+    porque: >-
+      Una saga coreografiada es una cadena de fan-outs donde cada consumidor
+      publica a su vez su propio hecho.
 ---
 
 import FanOutProblema from '../../components/diagrama/FanOutProblema.astro';
@@ -276,22 +300,7 @@ Ojo también con la regla de los 64 KB: cada porción de 64 KB de payload se fac
 como una petición. Un mensaje de 256 KB cuesta cuatro, no una.
 </Caja>
 
-## Patrones relacionados
-
-- **Idempotencia en consumidores** — *lo requiere*. No es un complemento
-  recomendable: fan-out sin idempotencia está roto por construcción.
-- **DLQ y redrive** — *se combina con*. Una por cola, siempre.
-- **Claim-check** — *se combina con*. Cuando el evento no cabe en 256 KB.
-- **Pub/sub con EventBridge** — *compite con*. Mismo problema, distinto reparto:
-  EventBridge te da reglas de enrutado ricas, archivo y replay, a cambio de más
-  latencia y menos throughput. Si necesitas replay, la decisión ya está tomada.
-- **Cola punto a punto** — *compite con*. Con un solo consumidor, SNS sobra.
-- **Saga por coreografía** — *se construye encima*. Una saga coreografiada es una
-  cadena de fan-outs donde cada consumidor publica su propio hecho.
-
----
-
-### Fuentes
+## Fuentes
 
 Cuotas de SNS y distinción hard/soft: [Amazon SNS endpoints and
 quotas](https://docs.aws.amazon.com/general/latest/gr/sns.html). Garantías de

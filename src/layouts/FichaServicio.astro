@@ -1,0 +1,196 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import { Icon } from '@aws-icons/astro';
+import Base from './Base.astro';
+import { patronesQueUsan } from '../lib/coherencia';
+
+interface Props {
+  entrada: CollectionEntry<'servicios'>;
+}
+const { entrada } = Astro.props;
+const d = entrada.data;
+
+// "Dónde aparece esto" nunca se escribe a mano: se invierten los `servicios`
+// que declaran los patrones. Así el puente entre los dos catálogos no puede
+// quedarse desactualizado.
+const apariciones = await patronesQueUsan(entrada.id);
+---
+
+<Base
+  titulo={`${d.titulo} · aws.crafter.run`}
+  descripcion={d.en_una_frase ?? d.titulo}
+  seccion="servicios"
+>
+  <main class="envoltura">
+    <div class="cabecera">
+      <div class="cabecera__marca">
+        <Icon name={d.icono as never} width="56" height="56" />
+        <div>
+          <h1 class="cabecera__titulo">{d.titulo}</h1>
+          {d.nombre_completo && <p class="cabecera__completo">{d.nombre_completo}</p>}
+        </div>
+      </div>
+
+      {d.en_una_frase && <p class="cabecera__frase">{d.en_una_frase}</p>}
+
+      {d.verificado_en && (
+        <p class="cabecera__sellos">
+          <span class="sello">
+            Verificado el <time datetime={d.verificado_en}>{d.verificado_en}</time>
+          </span>
+        </p>
+      )}
+    </div>
+
+    {d.los_3_conceptos && (
+      <section class="conceptos">
+        <h2 class="seccion__titulo">Los tres conceptos</h2>
+        <p class="seccion__nota">Si no entiendes estos tres, nada de lo demás encaja.</p>
+        <ol class="conceptos__lista">
+          {d.los_3_conceptos.map((c, i) => (
+            <li class="concepto">
+              <span class="concepto__n">{i + 1}</span>
+              <div>
+                <p class="concepto__termino">{c.termino}</p>
+                <p class="concepto__texto">{c.explicacion}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+    )}
+
+    {d.limites && (
+      <section class="limites">
+        <h2 class="seccion__titulo">Los límites</h2>
+        <p class="seccion__nota">
+          <strong>Hard</strong> es un muro: no se sube ni con un ticket.{' '}
+          <strong>Soft</strong> se amplía pidiéndolo — antes del pico, no durante.
+        </p>
+        <div class="limites__caja">
+          <table class="tabla">
+            <thead>
+              <tr><th>Concepto</th><th>Valor</th><th>Tipo</th></tr>
+            </thead>
+            <tbody>
+              {d.limites.map((l) => (
+                <tr>
+                  <td>
+                    {l.concepto}
+                    {l.nota && <span class="limite__nota">{l.nota}</span>}
+                  </td>
+                  <td class="limite__valor">{l.valor}</td>
+                  <td><span class={`marca marca--${l.tipo}`}>{l.tipo}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    )}
+
+    <article class="prosa cuerpo">
+      <slot />
+    </article>
+
+    <section class="apariciones">
+      <h2 class="seccion__titulo">Dónde aparece esto</h2>
+      {apariciones.length > 0 ? (
+        <ul class="apariciones__lista">
+          {apariciones.map((p) => (
+            <li>
+              <a href={`/patrones/${p.id}/`}>
+                <span class="apariciones__familia">{p.data.familia}</span>
+                <span class="apariciones__titulo">{p.data.titulo}</span>
+                {p.data.intencion && <span class="apariciones__texto">{p.data.intencion}</span>}
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p class="seccion__nota">Todavía ningún patrón escrito lo usa.</p>
+      )}
+    </section>
+  </main>
+</Base>
+
+<style>
+  main { padding-bottom: 5rem; }
+
+  .cabecera { padding: 3.5rem 0 2rem; border-bottom: 1px solid var(--linea); }
+  .cabecera__marca { display: flex; align-items: center; gap: 1rem; }
+  .cabecera__marca :global(svg) { display: block; flex: none; }
+  .cabecera__titulo {
+    margin: 0; font-size: clamp(2.25rem, 6vw, 3rem); line-height: 1.05;
+    font-weight: 700; letter-spacing: -.025em;
+  }
+  .cabecera__completo { margin: .25rem 0 0; font-size: .9375rem; color: var(--tinta-tenue); }
+  .cabecera__frase {
+    max-width: 38rem; margin: 1.5rem 0 0;
+    font-family: var(--serif); font-size: 1.3125rem; line-height: 1.55; color: var(--tinta-suave);
+  }
+  .cabecera__sellos { margin: 1.75rem 0 0; }
+
+  .seccion__titulo {
+    margin: 0; font-size: 1.625rem; font-weight: 700; letter-spacing: -.015em;
+  }
+  .seccion__nota { margin: .5rem 0 1.5rem; font-size: .9375rem; color: var(--tinta-tenue); }
+  .seccion__nota strong { color: var(--tinta-suave); }
+
+  .conceptos, .limites, .apariciones {
+    max-width: var(--medida); margin-top: 3rem; padding-top: 1.75rem;
+    border-top: 1px solid var(--linea);
+  }
+  .conceptos { border-top: 0; padding-top: 0; }
+
+  .conceptos__lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .75rem; }
+  .concepto {
+    display: flex; gap: .875rem; padding: 1rem 1.125rem;
+    background: var(--papel-alto); border: 1px solid var(--linea); border-radius: var(--radio);
+  }
+  .concepto__n {
+    flex: none; width: 1.5rem; height: 1.5rem; border-radius: 50%;
+    background: var(--acento); color: #fff;
+    display: grid; place-items: center; font-size: .8125rem; font-weight: 700;
+  }
+  .concepto__termino { margin: 0; font-weight: 600; font-size: 1.0625rem; }
+  .concepto__texto {
+    margin: .3rem 0 0; font-family: var(--serif); font-size: 1rem;
+    line-height: 1.55; color: var(--tinta-suave);
+  }
+
+  /* La tabla scrollea dentro de su caja; la página nunca en horizontal. */
+  .limites__caja { overflow-x: auto; }
+  .limites__caja .tabla { margin: 0; min-width: 32rem; }
+  .limite__nota {
+    display: block; margin-top: .2rem; font-size: .8125rem;
+    line-height: 1.45; color: var(--tinta-tenue);
+  }
+  .limite__valor { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .marca {
+    display: inline-block; padding: .1rem .45rem; border-radius: 3px;
+    font-size: .6875rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  }
+  .marca--hard { background: var(--peligro-suave); color: var(--peligro); }
+  .marca--soft { background: var(--papel-hondo); color: var(--tinta-tenue); }
+
+  .cuerpo { margin-top: 1rem; }
+
+  .apariciones__lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .75rem; }
+  .apariciones__lista a {
+    display: block; padding: 1rem 1.125rem; text-decoration: none;
+    background: var(--papel-alto); border: 1px solid var(--linea); border-radius: var(--radio);
+  }
+  .apariciones__lista a:hover { border-color: var(--acento); background: var(--acento-suave); }
+  .apariciones__familia {
+    display: block; font-size: .6875rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--acento);
+  }
+  .apariciones__titulo {
+    display: block; margin-top: .2rem; font-size: 1.0625rem; font-weight: 600; color: var(--tinta);
+  }
+  .apariciones__texto {
+    display: block; margin-top: .25rem; font-family: var(--serif);
+    font-size: 1rem; line-height: 1.5; color: var(--tinta-suave);
+  }
+</style>
