@@ -1,0 +1,22 @@
+---
+interface Props {
+  x: number; y: number;
+  texto: string;
+  /** "titulo" para encabezar una mitad del diagrama. */
+  estilo?: 'normal' | 'titulo' | 'peligro' | 'bien';
+  ancla?: 'start' | 'middle' | 'end';
+}
+const { x, y, texto, estilo = 'normal', ancla = 'middle' } = Astro.props;
+---
+
+<text x={x} y={y} class={`etq etq--${estilo}`} style={`text-anchor:${ancla}`}>{texto}</text>
+
+<style>
+  .etq { font-family: var(--sans); font-size: 11px; fill: var(--tinta-tenue); }
+  .etq--titulo {
+    font-size: 12px; font-weight: 700; fill: var(--tinta-suave);
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  .etq--peligro { fill: var(--peligro); font-weight: 600; }
+  .etq--bien    { fill: var(--bien);    font-weight: 600; }
+</style>

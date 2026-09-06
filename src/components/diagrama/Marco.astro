@@ -1,0 +1,27 @@
+---
+interface Props {
+  x: number; y: number;
+  ancho: number; alto: number;
+  etiqueta?: string;
+  /** "peligro" marca la zona que es el problema. */
+  tono?: 'normal' | 'peligro' | 'bien';
+}
+const { x, y, ancho, alto, etiqueta, tono = 'normal' } = Astro.props;
+---
+
+<g class={`marco marco--${tono}`}>
+  <rect x={x} y={y} width={ancho} height={alto} rx="8" class="marco__caja" />
+  {etiqueta && <text x={x + 12} y={y + 18} class="marco__etiqueta">{etiqueta}</text>}
+</g>
+
+<style>
+  .marco__caja { fill: none; stroke-width: 1.5; stroke-dasharray: 5 5; stroke: var(--linea-fuerte); }
+  .marco__etiqueta {
+    font-family: var(--sans); font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; text-transform: uppercase; fill: var(--tinta-tenue);
+  }
+  .marco--peligro .marco__caja { stroke: #e5a3a3; }
+  .marco--peligro .marco__etiqueta { fill: var(--peligro); }
+  .marco--bien .marco__caja { stroke: #a8cfb7; }
+  .marco--bien .marco__etiqueta { fill: var(--bien); }
+</style>

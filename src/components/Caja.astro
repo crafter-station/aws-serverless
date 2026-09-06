@@ -1,0 +1,62 @@
+---
+interface Props {
+  /**
+   * trampa  — lo que te va a morder en producción
+   * no      — cuándo NO usar esto
+   * clave   — la idea que hay que llevarse
+   * dato    — un número verificado
+   */
+  tipo: 'trampa' | 'no' | 'clave' | 'dato';
+  titulo?: string;
+}
+const { tipo, titulo } = Astro.props;
+
+const porDefecto = {
+  trampa: 'Te va a morder',
+  no: 'Cuándo NO usarlo',
+  clave: 'La idea',
+  dato: 'Dato verificado',
+} as const;
+
+const encabezado = titulo ?? porDefecto[tipo];
+---
+
+<aside class={`caja caja--${tipo}`}>
+  <p class="caja__titulo">{encabezado}</p>
+  <div class="caja__cuerpo"><slot /></div>
+</aside>
+
+<style>
+  .caja {
+    margin: 2rem 0;
+    padding: 1.125rem 1.25rem;
+    border-radius: var(--radio);
+    border-left: 3px solid;
+    background: var(--papel-hondo);
+    border-color: var(--linea-fuerte);
+  }
+  .caja__titulo {
+    margin: 0 0 .5rem;
+    font-family: var(--sans);
+    font-size: .75rem;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--tinta-tenue);
+  }
+  .caja__cuerpo :global(> :first-child) { margin-top: 0; }
+  .caja__cuerpo :global(> :last-child)  { margin-bottom: 0; }
+  .caja__cuerpo { font-size: .95em; }
+
+  .caja--trampa { background: #fdf6ec; border-color: #e0a341; }
+  .caja--trampa .caja__titulo { color: #a1660a; }
+
+  .caja--no { background: var(--peligro-suave); border-color: var(--peligro); }
+  .caja--no .caja__titulo { color: var(--peligro); }
+
+  .caja--clave { background: var(--acento-suave); border-color: var(--acento); }
+  .caja--clave .caja__titulo { color: var(--acento); }
+
+  .caja--dato { background: var(--bien-suave); border-color: var(--bien); }
+  .caja--dato .caja__titulo { color: var(--bien); }
+</style>

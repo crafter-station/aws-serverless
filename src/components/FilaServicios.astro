@@ -1,0 +1,36 @@
+---
+import { Icon } from '@aws-icons/astro';
+
+interface Props {
+  servicios: { icono: string; nombre: string }[];
+}
+const { servicios } = Astro.props;
+---
+
+<div class="fila">
+  <span class="fila__rotulo">Servicios</span>
+  <ul class="fila__lista">
+    {servicios.map((s) => (
+      <li class="fila__item">
+        <Icon name={s.icono as never} width="22" height="22" />
+        <span>{s.nombre}</span>
+      </li>
+    ))}
+  </ul>
+</div>
+
+<style>
+  .fila { display: flex; gap: .875rem; align-items: baseline; flex-wrap: wrap; }
+  .fila__rotulo {
+    font-size: .6875rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--tinta-tenue);
+  }
+  .fila__lista { display: flex; flex-wrap: wrap; gap: .5rem; list-style: none; margin: 0; padding: 0; }
+  .fila__item {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .25rem .625rem .25rem .3rem;
+    background: var(--papel-alto); border: 1px solid var(--linea);
+    border-radius: 999px; font-size: .8125rem; color: var(--tinta-suave);
+  }
+  .fila__item :global(svg) { display: block; flex: none; }
+</style>

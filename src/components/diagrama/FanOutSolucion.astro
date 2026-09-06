@@ -1,0 +1,56 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Nota from './Nota.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const SNS_X = 238;
+const COLA_X = 396;
+const FN_X = 528;
+const FILAS = [40, 156, 272];
+
+const ramas = [
+  { cola: 'cola-email',      fn: 'enviarEmail' },
+  { cola: 'cola-inventario', fn: 'actualizarStock' },
+  { cola: 'cola-analytics',  fn: 'registrarMétrica' },
+];
+---
+
+<Diagrama
+  ancho={700}
+  alto={392}
+  tono="bien"
+  titulo="API Gateway invoca una Lambda que publica un evento en un topic de SNS. El topic entrega copias del mensaje a tres colas SQS independientes, cada una consumida por su propia función Lambda."
+  pie="<strong>Un productor, tres consumidores que no se conocen.</strong> El cliente recibe respuesta en 40 ms. Cada rama reintenta, falla y escala por su cuenta: si el email se cae, el inventario ni se entera. Añadir una cuarta rama no toca el código del productor."
+>
+  <Etiqueta x={40} y={20} texto="Después" estilo="bien" ancla="start" />
+
+  <Nodo x={20}    y={156} icono="amazon-api-gateway" titulo="API Gateway" />
+  <Nodo x={124}   y={156} icono="aws-lambda" titulo="crearPedido" sub="publica y responde" />
+  <Nodo x={SNS_X} y={156} icono="amazon-simple-notification-service" titulo="SNS" sub="topic pedidos" />
+
+  <Flecha de={[72, 182]}  a={[122, 182]} etiqueta="40 ms" />
+  <Flecha de={[176, 182]} a={[236, 182]} tipo="evento" />
+
+  <Marco x={378} y={16} ancho={296} alto={356} etiqueta="Consumidores independientes" tono="bien" />
+
+  {ramas.map((r, i) => (
+    <Fragment>
+      <Nodo x={COLA_X} y={FILAS[i]} icono="amazon-simple-queue-service" titulo="SQS" sub={r.cola} />
+      <Nodo x={FN_X}   y={FILAS[i]} icono="aws-lambda" titulo={r.fn} />
+      <Flecha de={[450, FILAS[i] + 26]} a={[526, FILAS[i] + 26]} />
+    </Fragment>
+  ))}
+
+  <Flecha de={[294, 176]} a={[394, 66]}  tipo="evento" curva={-12} />
+  <Flecha de={[294, 182]} a={[394, 182]} tipo="evento" />
+  <Flecha de={[294, 188]} a={[394, 298]} tipo="evento" curva={12} />
+
+  <Nota x={344} y={104} n="1" />
+  <Nota x={344} y={166} n="2" />
+  <Nota x={344} y={250} n="3" />
+
+  <Etiqueta x={350} y={386} texto="Una copia del mensaje por cola · cada cola con su propia DLQ y su propia concurrencia" />
+</Diagrama>

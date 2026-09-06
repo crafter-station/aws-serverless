@@ -1,0 +1,59 @@
+/* ── Tokens ─────────────────────────────────────────────────────────────
+   Claro y cálido. Los iconos oficiales de AWS son cuadrados a todo color
+   pensados para fondo blanco: la paleta se construye alrededor de ellos,
+   no contra ellos.
+*/
+:root {
+  --papel:        #faf7f2;
+  --papel-hondo:  #f2ece2;
+  --papel-alto:   #fffdfa;
+  --tinta:        #2b2521;
+  --tinta-suave:  #5c534b;
+  --tinta-tenue:  #8a7f74;
+  --linea:        #e3dace;
+  --linea-fuerte: #cdc0ae;
+
+  --acento:       #c2410c;  /* terracota; pariente del naranja de AWS */
+  --acento-suave: #fdf0e7;
+  --peligro:      #b91c1c;
+  --peligro-suave:#fdeeee;
+  --bien:         #15803d;
+  --bien-suave:   #edf7f0;
+
+  --serif: "Source Serif 4", Charter, Georgia, "Times New Roman", serif;
+  --sans:  Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --mono:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --medida: 68ch;
+  --radio: 6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--papel);
+  color: var(--tinta);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--acento); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+::selection { background: var(--acento-suave); }
+
+:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

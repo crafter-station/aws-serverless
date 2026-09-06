@@ -1,0 +1,48 @@
+---
+interface Props {
+  ancho: number;
+  alto: number;
+  /** Descripción para lectores de pantalla. Obligatoria. */
+  titulo: string;
+  /** Pie de figura visible. */
+  pie?: string;
+  /** "roto" tiñe el lienzo: se usa para el diagrama del problema. */
+  tono?: 'normal' | 'roto' | 'bien';
+}
+const { ancho, alto, titulo, pie, tono = 'normal' } = Astro.props;
+---
+
+<figure class={`dgm dgm--${tono}`}>
+  <div class="dgm__lienzo">
+    <svg viewBox={`0 0 ${ancho} ${alto}`} role="img" aria-label={titulo}>
+      <slot />
+    </svg>
+  </div>
+  {pie && <figcaption class="dgm__pie" set:html={pie} />}
+</figure>
+
+<style>
+  .dgm { margin: 2.5rem 0; }
+
+  /* El diagrama scrollea dentro de su caja; la página nunca scrollea en horizontal. */
+  .dgm__lienzo {
+    overflow-x: auto;
+    background: var(--papel-alto);
+    border: 1px solid var(--linea);
+    border-radius: var(--radio);
+    padding: 1.5rem 1.25rem;
+  }
+  .dgm--roto .dgm__lienzo { background: var(--peligro-suave); border-color: #f0d5d5; }
+  .dgm--bien .dgm__lienzo { background: var(--bien-suave);    border-color: #d3e7da; }
+
+  .dgm__lienzo svg { display: block; width: 100%; height: auto; min-width: 480px; }
+
+  .dgm__pie {
+    margin: .75rem 0 0;
+    font-family: var(--sans);
+    font-size: .8125rem;
+    line-height: 1.5;
+    color: var(--tinta-tenue);
+  }
+  .dgm__pie :global(strong) { color: var(--tinta-suave); font-weight: 600; }
+</style>

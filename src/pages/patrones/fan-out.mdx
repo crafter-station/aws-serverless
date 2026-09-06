@@ -1,0 +1,303 @@
+---
+layout: ../../layouts/Ficha.astro
+titulo: Fan-out
+alias: Fan-out / publish–subscribe
+familia: Comunicación
+dificultad: 1
+intencion: Un productor emite un hecho una sola vez y varios consumidores independientes reaccionan a él en paralelo, sin que el productor sepa cuántos son ni qué hacen.
+verificado_en: "2026-09-06"
+servicios:
+  - { icono: amazon-simple-notification-service, nombre: SNS }
+  - { icono: amazon-simple-queue-service, nombre: SQS }
+  - { icono: aws-lambda, nombre: Lambda }
+  - { icono: amazon-event-bridge, nombre: EventBridge }
+---
+
+import FanOutProblema from '../../components/diagrama/FanOutProblema.astro';
+import FanOutSolucion from '../../components/diagrama/FanOutSolucion.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tienes un endpoint que crea pedidos. Al principio hacía una cosa: guardar el pedido
+en DynamoDB. Luego el equipo de producto pidió un email de confirmación. Después,
+descontar del inventario. Después, mandar un evento a analítica.
+
+Cada petición se añadió donde era más fácil: dentro de la misma función Lambda,
+una detrás de otra.
+
+<FanOutProblema />
+
+Hay tres cosas rotas aquí, y solo una es obvia.
+
+La obvia es la **latencia**: el cliente espera la suma de los tres pasos, no el más
+lento. Si guardar tarda 120 ms, el email 800 ms y el inventario 300 ms, tu API
+responde en 1,22 s para hacer un trabajo que en paralelo costaría 800 ms.
+
+La segunda es el **acoplamiento de fallos**. El servicio de email es de un tercero
+y se cae los martes. Cuando se cae, tu función lanza una excepción, el cliente ve
+un `500`... y el pedido ya está guardado en DynamoDB. Ahora tienes un pedido que
+existe, un cliente que cree que falló, y ningún email. Esto no es un bug: es la
+consecuencia directa de meter tres operaciones con modos de fallo distintos dentro
+de una transacción que no es una transacción.
+
+La tercera es la **fricción para cambiar**. Añadir un cuarto efecto —avisar al
+almacén— significa tocar, probar y desplegar la función que crea pedidos. La
+función que crea pedidos se convierte en el sitio por donde pasa todo el mundo,
+y en el sitio donde todo el mundo rompe cosas.
+
+<Caja tipo="clave">
+Los tres síntomas tienen la misma causa: **el productor conoce a sus consumidores**.
+Mientras esa dependencia exista, cada consumidor nuevo es un cambio en el productor
+y cada consumidor caído es un productor caído.
+</Caja>
+
+## La solución
+
+Invierte quién conoce a quién. El productor deja de llamar a nadie: publica un
+hecho —*"se ha creado el pedido 4711"*— y termina. Los consumidores se suscriben
+a ese hecho por su cuenta.
+
+<FanOutSolucion />
+
+La pieza que hace el reparto es un **topic de SNS**. Publicas un mensaje y SNS
+entrega una copia a cada suscripción. La pieza que hace que esto sea robusto es
+que cada suscripción es **una cola SQS, no una Lambda directa**.
+
+Esa segunda decisión es la que separa un fan-out que aguanta de uno que parece
+que funciona:
+
+- La cola **absorbe el pico**. Si entran 5 000 pedidos en diez segundos, la cola
+  los guarda; las Lambdas los consumen al ritmo que puedan.
+- La cola **guarda el mensaje mientras el consumidor está caído**. Con SNS a Lambda
+  directo, si tu función falla y agota los reintentos, el mensaje se pierde.
+  Con una cola en medio, el mensaje sigue ahí cuando vuelves.
+- Cada cola tiene **su propia DLQ y su propia concurrencia**. El email puede ir a
+  10 en paralelo y el inventario a 2, sin negociarlo con nadie.
+
+## Cuándo usarlo
+
+- Un hecho del dominio dispara **varios efectos que no se necesitan entre sí**:
+  crear pedido, y de ahí email, inventario, analítica, antifraude.
+- Los consumidores tienen **modos de fallo o ritmos distintos** y no quieres que
+  el lento contagie al rápido.
+- Esperas **añadir consumidores** que hoy no existen, y quieres hacerlo sin tocar
+  al productor.
+- Al cliente **no le hace falta el resultado** de esos efectos para continuar.
+
+<Caja tipo="no">
+- **Necesitas el resultado para responder.** Fan-out es fuego y olvido. Si el
+  cliente tiene que saber si el pago se aprobó, eso es una llamada síncrona o una
+  orquestación con Step Functions, no un evento.
+- **Necesitas orden estricto.** SNS estándar no garantiza orden. La versión FIFO
+  existe, pero cae a **100 suscripciones por topic** y menos throughput; si el
+  orden es el requisito central, mira Kinesis o SQS FIFO directo.
+- **Necesitas repetir el pasado.** Los topics estándar de SNS no archivan nada:
+  si un consumidor tuvo un bug tres días, esos eventos no vuelven. Eso es
+  EventBridge (archive y replay) o Kinesis (retención).
+- **Necesitas enrutar por contenido con reglas ricas.** Las filter policies de SNS
+  son de igualdad y rangos sobre atributos. Reglas de verdad son EventBridge.
+- **Solo hay un consumidor y no va a haber más.** Entonces es una cola SQS y ya.
+  SNS delante de una única cola es una pieza que mantener a cambio de nada.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Nombra el evento como un hecho pasado**, no como una orden: `PedidoCreado`,
+   no `EnviarEmail`. Si el nombre es una orden, has escrito una llamada RPC con
+   pasos extra.
+2. **Crea el topic** y publica desde el productor. El productor no sabe —y no debe
+   poder averiguar— quién escucha.
+3. **Una cola SQS por consumidor.** Nunca dos consumidores compartiendo cola: en
+   una cola cada mensaje lo recibe uno solo, así que compartirla convierte tu
+   fan-out en un reparto de carga.
+4. **Suscribe cada cola al topic** y activa **raw message delivery** (ver trampas).
+5. **Da permiso a SNS para escribir en cada cola** mediante la política de recursos
+   de la cola, con condición sobre el ARN del topic.
+6. **Añade una DLQ a cada cola** con `maxReceiveCount` entre 3 y 5.
+7. **Conecta cada Lambda a su cola** con `reportBatchItemFailures` activado.
+8. **Haz idempotente a cada consumidor.** No es opcional: ver trampas.
+
+## El código
+
+```ts
+// Productor: publica el hecho y termina.
+import { SNSClient, PublishCommand } from '@aws-sdk/client-sns';
+
+const sns = new SNSClient({});
+
+export const crearPedido = async (evento: APIGatewayProxyEventV2) => {
+  const pedido = await guardarEnDynamo(JSON.parse(evento.body!));
+
+  await sns.send(new PublishCommand({
+    TopicArn: process.env.TOPIC_PEDIDOS,
+    Message: JSON.stringify(pedido),
+    // Los atributos son lo que las filter policies pueden mirar.
+    // El cuerpo del mensaje no es filtrable salvo que declares
+    // MessageBody como ambito de filtrado en la suscripcion.
+    MessageAttributes: {
+      tipo: { DataType: 'String', StringValue: 'PedidoCreado' },
+      pais: { DataType: 'String', StringValue: pedido.pais },
+    },
+  }));
+
+  return { statusCode: 202, body: JSON.stringify({ id: pedido.id }) };
+};
+```
+
+```ts
+// Consumidor: idempotente y con fallo parcial.
+import type { SQSEvent, SQSBatchResponse } from 'aws-lambda';
+
+export const enviarEmail = async (evento: SQSEvent): Promise<SQSBatchResponse> => {
+  const fallidos: { itemIdentifier: string }[] = [];
+
+  for (const registro of evento.Records) {
+    try {
+      // Con raw message delivery activado, el body ES el mensaje.
+      // Sin el, seria JSON.parse(registro.body).Message: un string
+      // dentro de un sobre. Ver trampas.
+      const pedido = JSON.parse(registro.body);
+
+      // Idempotencia: SNS entrega al menos una vez y SQS estandar
+      // tambien. Los duplicados no son una posibilidad remota,
+      // son una certeza a largo plazo.
+      if (await yaProcesado(pedido.id)) continue;
+
+      await mandarCorreo(pedido);
+      await marcarProcesado(pedido.id);
+    } catch {
+      // Solo este mensaje vuelve a la cola. Sin esto, un unico
+      // mensaje venenoso hace reprocesar el lote entero.
+      fallidos.push({ itemIdentifier: registro.messageId });
+    }
+  }
+
+  return { batchItemFailures: fallidos };
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · El sobre de SNS">
+Por defecto SNS **no** entrega tu mensaje: entrega un sobre JSON con metadatos
+donde tu payload es un *string* dentro del campo `Message`. El consumidor recibe
+un objeto con `Type`, `MessageId` y un `Message` que es texto plano, así que tu
+`JSON.parse(body).id` sale `undefined`.
+
+Se arregla activando **raw message delivery** en la suscripción. Pero hay un precio
+que casi nadie menciona: con raw activado el registro que llega a SQS ya no trae
+el sobre, y con él se van los `MessageAttributes` tal y como venían. Si tu
+consumidor los necesita, mételos en el cuerpo del mensaje.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · El permiso que falla en silencio">
+Crear la suscripción de SNS a SQS **no** da permiso a SNS para escribir en la cola.
+Ese permiso vive en la *política de recursos de la cola*. Si falta, la suscripción
+aparece como confirmada, el `Publish` devuelve `200`, y los mensajes simplemente
+no llegan. No hay error en ningún sitio: hay una métrica
+`NumberOfNotificationsFailed` en CloudWatch que nadie está mirando.
+
+Pon siempre la condición `aws:SourceArn` sobre el ARN del topic. Sin ella,
+cualquier topic de cualquier cuenta puede escribir en tu cola.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Tu región no aguanta lo que crees">
+El límite de `Publish` de SNS es **soft y varía brutalmente por región**. Verificado
+contra la documentación de cuotas de AWS:
+
+| Región | Topics estándar |
+| --- | --- |
+| us-east-1 | 30 000 msg/s |
+| us-west-2, eu-west-1 | 9 000 msg/s |
+| us-east-2, us-west-1, ap-south-1, ap-northeast-1/2, ap-southeast-1/2, eu-central-1 | 1 500 msg/s |
+| **Todas las demás** | **300 msg/s** |
+
+Si despliegas en São Paulo, Milán o Bahréin, tu fan-out se estrangula a 300
+mensajes por segundo. Es ampliable con un ticket, pero descubrirlo el día del pico
+es otra cosa.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Dos DLQ que no son la misma">
+Hay dos sitios donde poner una DLQ y atrapan fallos distintos:
+
+- La **DLQ de la suscripción SNS** atrapa lo que SNS no consiguió *entregar a la
+  cola*: permisos rotos, cola borrada.
+- La **redrive policy de la cola SQS** atrapa lo que el *consumidor* no consiguió
+  procesar: el bug de tu código.
+
+La inmensa mayoría de tus fallos son del segundo tipo. Si solo pones una, pon la
+de SQS. Si solo pones la de SNS, tienes una DLQ que nunca recibe nada y una falsa
+sensación de estar cubierto.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Duplicados garantizados">
+SNS entrega **al menos una vez**. SQS estándar también, y la documentación es
+explícita: *"more than one copy of a message might be delivered, and messages may
+occasionally arrive out of order"*.
+
+Encadenados, los duplicados dejan de ser un caso raro y pasan a ser una certeza
+estadística. Un consumidor de fan-out que no es idempotente no está *casi* bien:
+está roto y todavía no te has enterado. Si el consumidor manda emails, tu cliente
+recibirá dos.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · El límite de 256 KB">
+El mensaje máximo de SNS son **262 144 bytes (256 KiB)**, igual que en SQS. No
+metas el PDF de la factura en el evento: mete el hecho y una referencia a S3. Si
+de verdad necesitas payloads grandes, existen las *Extended Client Libraries*
+(hasta 2 GB apoyándose en S3), que es exactamente el patrón claim-check con otro
+nombre.
+</Caja>
+
+## Coste
+
+Los precios se mueven; los órdenes de magnitud no. Para us-east-1, aproximadamente:
+
+| Concepto | Precio |
+| --- | --- |
+| Publicaciones en SNS | ~0,50 USD / millón (primer millón gratis) |
+| Entregas de SNS a SQS | **sin coste de entrega** |
+| Peticiones de SQS estándar | ~0,40 USD / millón (primer millón gratis) |
+| Invocaciones Lambda | ~0,20 USD / millón, más duración |
+
+La consecuencia práctica es que **el reparto es casi gratis y los consumidores no**:
+publicar un millón de eventos cuesta céntimos, pero cada rama que añades multiplica
+las peticiones de SQS y las invocaciones de Lambda. El coste de un fan-out crece
+con el número de consumidores, no con el de eventos.
+
+<Caja tipo="trampa" titulo="El coste que no aparece en el diagrama">
+Una cola vacía **no es gratis**. El *event source mapping* de Lambda sondea la cola
+continuamente, y cada sondeo es una petición de SQS facturable aunque no haya
+mensajes. Tres colas ociosas generan tráfico las 24 horas. No arruina a nadie, pero
+explica la línea de SQS en tu factura cuando el sistema "no está haciendo nada".
+
+Ojo también con la regla de los 64 KB: cada porción de 64 KB de payload se factura
+como una petición. Un mensaje de 256 KB cuesta cuatro, no una.
+</Caja>
+
+## Patrones relacionados
+
+- **Idempotencia en consumidores** — *lo requiere*. No es un complemento
+  recomendable: fan-out sin idempotencia está roto por construcción.
+- **DLQ y redrive** — *se combina con*. Una por cola, siempre.
+- **Claim-check** — *se combina con*. Cuando el evento no cabe en 256 KB.
+- **Pub/sub con EventBridge** — *compite con*. Mismo problema, distinto reparto:
+  EventBridge te da reglas de enrutado ricas, archivo y replay, a cambio de más
+  latencia y menos throughput. Si necesitas replay, la decisión ya está tomada.
+- **Cola punto a punto** — *compite con*. Con un solo consumidor, SNS sobra.
+- **Saga por coreografía** — *se construye encima*. Una saga coreografiada es una
+  cadena de fan-outs donde cada consumidor publica su propio hecho.
+
+---
+
+### Fuentes
+
+Cuotas de SNS y distinción hard/soft: [Amazon SNS endpoints and
+quotas](https://docs.aws.amazon.com/general/latest/gr/sns.html). Garantías de
+entrega: [Amazon SQS standard
+queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html).
+Regla de facturación por porciones de 64 KB: [SQS
+pricing](https://aws.amazon.com/sqs/pricing/). Los importes concretos proceden de
+las páginas de precios de AWS, que se renderizan dinámicamente y no pudieron
+citarse literalmente: trátalos como orden de magnitud, no como cifra contractual.

@@ -1,0 +1,65 @@
+---
+type Punto = [number, number];
+
+interface Props {
+  de: Punto;
+  a: Punto;
+  /**
+   * sync   — llamada síncrona: alguien espera la respuesta (línea continua)
+   * evento — entrega asíncrona: nadie espera (línea discontinua)
+   * fallo  — el camino que se rompe (rojo)
+   */
+  tipo?: 'sync' | 'evento' | 'fallo';
+  etiqueta?: string;
+  /** Curvatura perpendicular en px. Signo = lado hacia el que se comba. */
+  curva?: number;
+  /** Ajuste fino de la etiqueta. */
+  ex?: number;
+  ey?: number;
+}
+const { de, a, tipo = 'sync', etiqueta, curva = 0, ex = 0, ey = -7 } = Astro.props;
+
+const [x1, y1] = de;
+const [x2, y2] = a;
+
+// Punto de control: el medio, desplazado en perpendicular a la recta.
+const mx = (x1 + x2) / 2;
+const my = (y1 + y2) / 2;
+const largo = Math.hypot(x2 - x1, y2 - y1) || 1;
+const px = -(y2 - y1) / largo;
+const py = (x2 - x1) / largo;
+const cx = mx + px * curva * 2;
+const cy = my + py * curva * 2;
+
+const d = curva ? `M${x1},${y1} Q${cx},${cy} ${x2},${y2}` : `M${x1},${y1} L${x2},${y2}`;
+
+// En una cuadrática, el punto en t=0.5 es (P0 + 2C + P2) / 4.
+const tx = curva ? (x1 + 2 * cx + x2) / 4 : mx;
+const ty = curva ? (y1 + 2 * cy + y2) / 4 : my;
+
+const punta =
+  tipo === 'fallo' ? 'url(#punta-peligro)' : tipo === 'evento' ? 'url(#punta-acento)' : 'url(#punta)';
+---
+
+<g class={`flecha flecha--${tipo}`}>
+  <path d={d} marker-end={punta} />
+  {etiqueta && (
+    <text x={tx + ex} y={ty + ey} class="flecha__etiqueta">{etiqueta}</text>
+  )}
+</g>
+
+<style>
+  .flecha path { fill: none; stroke-width: 1.75; stroke-linecap: round; }
+  .flecha--sync   path { stroke: var(--tinta-tenue); }
+  .flecha--evento path { stroke: var(--acento); stroke-dasharray: 6 5; }
+  .flecha--fallo  path { stroke: var(--peligro); }
+
+  .flecha__etiqueta {
+    text-anchor: middle;
+    font-family: var(--sans);
+    font-size: 11px;
+    fill: var(--tinta-tenue);
+  }
+  .flecha--evento .flecha__etiqueta { fill: var(--acento); }
+  .flecha--fallo  .flecha__etiqueta { fill: var(--peligro); }
+</style>

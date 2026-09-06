@@ -1,0 +1,23 @@
+---
+/*
+  Definiciones SVG compartidas por todos los diagramas de la página.
+  Se renderiza UNA vez en el layout: así los marcadores tienen un id único
+  en el documento y cualquier <Diagrama> puede referenciarlos.
+*/
+---
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <defs>
+    <marker id="punta" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0.5,1 L9,5 L0.5,9 Z" fill="#8a7f74" />
+    </marker>
+    <marker id="punta-acento" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0.5,1 L9,5 L0.5,9 Z" fill="#c2410c" />
+    </marker>
+    <marker id="punta-peligro" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0.5,1 L9,5 L0.5,9 Z" fill="#b91c1c" />
+    </marker>
+  </defs>
+</svg>

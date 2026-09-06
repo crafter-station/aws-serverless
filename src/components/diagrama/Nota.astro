@@ -1,0 +1,23 @@
+---
+interface Props {
+  x: number; y: number;
+  /** El número que se referencia desde el texto de la ficha. */
+  n: number | string;
+  tono?: 'normal' | 'peligro';
+}
+const { x, y, n, tono = 'normal' } = Astro.props;
+---
+
+<g class={`nota nota--${tono}`}>
+  <circle cx={x} cy={y} r="10" class="nota__disco" />
+  <text x={x} y={y + 4} class="nota__n">{n}</text>
+</g>
+
+<style>
+  .nota__disco { fill: var(--acento); }
+  .nota--peligro .nota__disco { fill: var(--peligro); }
+  .nota__n {
+    text-anchor: middle; font-family: var(--sans);
+    font-size: 12px; font-weight: 700; fill: #fff;
+  }
+</style>

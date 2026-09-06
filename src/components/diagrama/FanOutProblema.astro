@@ -1,0 +1,46 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Nota from './Nota.astro';
+import Cruz from './Cruz.astro';
+import Etiqueta from './Etiqueta.astro';
+
+// Una sola Lambda hace tres cosas en fila. El cliente espera la suma.
+const LX = 244;          // x de la Lambda
+const CX = 512;          // x de la columna de destinos
+const FILAS = [36, 152, 268];
+---
+
+<Diagrama
+  ancho={700}
+  alto={400}
+  tono="roto"
+  titulo="Una única función Lambda llama en secuencia a DynamoDB, al servicio de email y a un API de inventario. El cliente espera la suma de las tres, y si el paso 2 falla, todo el pedido se pierde."
+  pie="<strong>Un solo procesador, tres responsabilidades.</strong> El cliente espera 1,22 s (la suma, no el máximo) y el fallo de <em>cualquiera</em> de los tres pasos tira toda la operación — incluido el pedido que ya estaba guardado."
+>
+  <Etiqueta x={40} y={20} texto="Antes" estilo="peligro" ancla="start" />
+
+  <Nodo x={20}  y={152} titulo="Cliente" />
+  <Nodo x={130} y={152} icono="amazon-api-gateway" titulo="API Gateway" />
+  <Nodo x={LX}  y={152} icono="aws-lambda" titulo="procesarPedido" sub="una sola función" />
+
+  <Flecha de={[72, 178]}  a={[128, 178]} />
+  <Flecha de={[182, 178]} a={[242, 178]} />
+
+  <Nodo x={CX} y={FILAS[0]} icono="amazon-dynamo-db" titulo="DynamoDB" sub="guardar pedido" />
+  <Nodo x={CX} y={FILAS[1]} icono="amazon-simple-email-service" titulo="SES" sub="email de confirmación" />
+  <Nodo x={CX} y={FILAS[2]} titulo="API de inventario" sub="servicio de un tercero" />
+
+  <Flecha de={[298, 172]} a={[510, 66]}  etiqueta="120 ms" curva={-14} />
+  <Flecha de={[298, 178]} a={[510, 178]} etiqueta="800 ms" tipo="fallo" />
+  <Flecha de={[298, 184]} a={[510, 292]} etiqueta="300 ms" curva={14} ey={14} />
+
+  <Nota x={340} y={110} n="1" />
+  <Nota x={340} y={196} n="2" tono="peligro" />
+  <Nota x={340} y={252} n="3" />
+
+  <Cruz x={430} y={178} />
+
+  <Etiqueta x={350} y={386} texto="El cliente espera 1 220 ms · si (2) falla, el pedido guardado en (1) queda huérfano" estilo="peligro" />
+</Diagrama>

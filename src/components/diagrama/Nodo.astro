@@ -1,0 +1,56 @@
+---
+import { loadIconSvg } from '@aws-icons/astro';
+
+interface Props {
+  /** Esquina superior izquierda del icono. */
+  x: number;
+  y: number;
+  /** Slug oficial de AWS. Sin él se dibuja una caja neutra (cliente, navegador...). */
+  icono?: string;
+  titulo: string;
+  /** Segunda línea, más tenue: la cardinalidad, el detalle, la advertencia. */
+  sub?: string;
+  tam?: number;
+  /** Atenúa el nodo: para lo que está de fondo o fuera de foco. */
+  tenue?: boolean;
+}
+const { x, y, icono, titulo, sub, tam = 52, tenue = false } = Astro.props;
+
+// Los iconos oficiales de AWS se inlinean SIN modificar: ni color, ni forma,
+// ni esquinas redondeadas. Solo se posicionan y escalan.
+const svgIcono = icono
+  ? await loadIconSvg(icono as never, 'architecture-service', { x, y, width: tam, height: tam })
+  : null;
+
+const cx = x + tam / 2;
+---
+
+<g class={tenue ? 'nodo nodo--tenue' : 'nodo'}>
+  {svgIcono
+    ? <Fragment set:html={svgIcono} />
+    : <rect x={x} y={y} width={tam} height={tam} rx="4" class="nodo__caja" />}
+  <text x={cx} y={y + tam + 16} class="nodo__titulo">{titulo}</text>
+  {sub && <text x={cx} y={y + tam + 30} class="nodo__sub">{sub}</text>}
+</g>
+
+<style>
+  .nodo__caja {
+    fill: var(--papel-hondo);
+    stroke: var(--linea-fuerte);
+    stroke-width: 1.5;
+  }
+  .nodo__titulo {
+    text-anchor: middle;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--tinta);
+  }
+  .nodo__sub {
+    text-anchor: middle;
+    font-family: var(--sans);
+    font-size: 11px;
+    fill: var(--tinta-tenue);
+  }
+  .nodo--tenue { opacity: .38; }
+</style>
