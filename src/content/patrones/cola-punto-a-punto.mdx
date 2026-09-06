@@ -8,6 +8,12 @@ intencion: Desacoplar a quien pide el trabajo de quien lo hace con una única co
 verificado_en: "2026-09-06"
 servicios: [sqs, lambda]
 relacionados:
+  - patron: circuit-breaker
+    tipo: compite con
+    porque: >-
+      Las dos responden a una dependencia lenta. Si la llamada puede ser
+      asíncrona, la cola gana: absorbe la caída entera sin que nadie tenga que
+      decidir cuándo dejar de llamar.
   - patron: batching-y-fallo-parcial
     tipo: se combina con
     porque: >-

@@ -8,6 +8,12 @@ intencion: Repartir el bote de concurrencia de la cuenta para que ninguna funciÃ
 verificado_en: "2026-09-06"
 servicios: [lambda, sqs, dynamodb]
 relacionados:
+  - patron: circuit-breaker
+    tipo: se combina con
+    porque: >-
+      El tope de concurrencia no sirve de nada si se llena de llamadas que
+      solo esperan un timeout. El cortacircuitos es lo que mantiene el mamparo
+      con sitio para el trabajo que sÃ­ puede salir.
   - patron: retry-con-backoff-y-jitter
     tipo: se combina con
     porque: >-

@@ -11,6 +11,12 @@ intencion: >-
 verificado_en: "2026-09-06"
 servicios: [lambda, step-functions, dynamodb, sqs, s3]
 relacionados:
+  - patron: circuit-breaker
+    tipo: se combina con
+    porque: >-
+      Son las dos mitades de la misma decisión. Reintentar trata el fallo
+      transitorio; el cortacircuitos es lo que apaga los reintentos cuando el
+      fallo dejó de ser transitorio y seguir insistiendo solo hace daño.
   - patron: idempotencia-en-consumidores
     tipo: requiere
     porque: >-

@@ -1,0 +1,69 @@
+---
+import Diagrama from './Diagrama.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+
+/*
+  Las cajas de estado no son Nodo: un Nodo representa un servicio y lleva su
+  icono debajo. Aquí lo que se dibuja es una máquina de estados, y el texto va
+  dentro. Es el único diagrama que la necesita, así que vive aquí y no sube a
+  primitiva.
+*/
+const ESTADOS = [
+  { x: 20, titulo: 'CERRADO', sub: 'todo pasa', tono: 'bien' },
+  { x: 280, titulo: 'ABIERTO', sub: 'falla al instante', tono: 'mal' },
+  { x: 540, titulo: 'SEMIABIERTO', sub: 'deja pasar una prueba', tono: 'duda' },
+];
+const W = 140;
+const H = 64;
+const Y = 110;
+---
+
+<Diagrama
+  ancho={700}
+  alto={264}
+  titulo="Máquina de tres estados. Cerrado: todas las llamadas pasan. Al superar el umbral de fallos pasa a abierto, donde ninguna llamada sale y el error es inmediato. Al expirar la espera pasa a semiabierto, que deja pasar una única llamada de prueba: si funciona vuelve a cerrado, y si vuelve a fallar regresa a abierto."
+  pie="<strong>El estado que importa es el semiabierto</strong>, y es el que casi nadie implementa. Sin él, al expirar la espera pasan todas las llamadas a la vez contra un servicio que acaba de levantarse — y lo vuelven a tirar. Semiabierto significa <em>una</em> llamada de prueba, no todas."
+>
+  {ESTADOS.map((e) => (
+    <g class={`estado estado--${e.tono}`}>
+      <rect x={e.x} y={Y} width={W} height={H} rx="6" />
+      <text x={e.x + W / 2} y={Y + 27} class="estado__titulo">{e.titulo}</text>
+      <text x={e.x + W / 2} y={Y + 46} class="estado__sub">{e.sub}</text>
+    </g>
+  ))}
+
+  {/* Cerrado → Abierto */}
+  <Flecha de={[160, 142]} a={[278, 142]} tipo="fallo" etiqueta="supera el umbral" />
+
+  {/* Abierto → Semiabierto */}
+  <Flecha de={[420, 142]} a={[538, 142]} etiqueta="expira la espera" />
+
+  {/* Semiabierto → Abierto: la prueba falla. Se comba por encima. */}
+  <Flecha de={[560, 108]} a={[400, 108]} tipo="fallo" curva={26} etiqueta="la prueba vuelve a fallar" />
+
+  {/* Semiabierto → Cerrado: la prueba funciona. Se comba por debajo. */}
+  <Flecha de={[610, 176]} a={[90, 176]} curva={-30} etiqueta="la prueba funciona" ey={13} />
+</Diagrama>
+
+<style>
+  .estado rect { stroke-width: 1.75; }
+  .estado__titulo {
+    text-anchor: middle; font-family: var(--sans); font-size: 13px;
+    font-weight: 700; letter-spacing: .04em;
+  }
+  .estado__sub {
+    text-anchor: middle; font-family: var(--sans); font-size: 11px;
+    fill: var(--tinta-tenue);
+  }
+
+  .estado--bien rect { fill: var(--bien-suave); stroke: #8cbf9d; }
+  .estado--bien .estado__titulo { fill: #1f6b3c; }
+
+  .estado--mal rect { fill: var(--peligro-suave); stroke: #e5a3a3; }
+  .estado--mal .estado__titulo { fill: var(--peligro); }
+
+  /* Ni una cosa ni la otra: es el estado en el que se está decidiendo. */
+  .estado--duda rect { fill: #fbe3c4; stroke: #e0a341; }
+  .estado--duda .estado__titulo { fill: #8a5606; }
+</style>

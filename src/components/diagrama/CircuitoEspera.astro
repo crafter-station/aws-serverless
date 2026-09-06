@@ -1,0 +1,48 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+// Escala: 140 px = 1 segundo.
+---
+
+<Diagrama
+  ancho={700}
+  alto={236}
+  tono="roto"
+  titulo="Comparación del tiempo que tarda en fallar una llamada a un servicio caído. Sin cortacircuitos, la llamada espera los tres segundos completos del timeout antes de devolver el error. Con el circuito abierto, el error vuelve en cinco milisegundos sin salir a la red."
+  pie="<strong>Un servicio caído no falla: tarda.</strong> Y mientras tarda, tu Lambda está viva, facturando y ocupando un hueco de concurrencia. A 100 peticiones por segundo con un timeout de 3 s hacen falta <strong>300 ejecuciones concurrentes</strong> solo para ir fallando — que es como una caída ajena se convierte en la tuya."
+>
+  <Barra
+    x={40}
+    y={54}
+    titulo="Sin cortacircuitos"
+    sub="3 s de espera que ya sabíamos que iban a acabar en error"
+    segmentos={[
+      { etiqueta: 'esperando al servicio caído · timeout 3 s', ancho: 420, tono: 'espera' },
+      { etiqueta: 'error', ancho: 84, tono: 'fallo' },
+    ]}
+  />
+
+  <Barra
+    x={40}
+    y={178}
+    titulo="Con el circuito abierto"
+    sub="ni siquiera se abre la conexión: la respuesta sale de la tabla de estado"
+    segmentos={[{ etiqueta: '', ancho: 14, tono: 'fallo' }]}
+  />
+  <Etiqueta x={64} y={197} texto="5 ms · error inmediato" estilo="peligro" ancla="start" />
+
+  {/* Regla de tiempo compartida por las dos barras. */}
+  <path d="M40,124 L544,124" class="regla" />
+  {[0, 1, 2, 3].map((s) => (
+    <Fragment>
+      <path d={`M${40 + s * 140},119 L${40 + s * 140},129`} class="regla" />
+      <Etiqueta x={40 + s * 140} y={142} texto={`${s} s`} />
+    </Fragment>
+  ))}
+</Diagrama>
+
+<style>
+  .regla { stroke: var(--linea-fuerte); stroke-width: 1; fill: none; opacity: .5; }
+</style>

@@ -8,6 +8,12 @@ intencion: Coordinar una operación que toca varios servicios sin transacción d
 verificado_en: "2026-09-06"
 servicios: [step-functions, lambda, dynamodb, sqs]
 relacionados:
+  - patron: circuit-breaker
+    tipo: se combina con
+    porque: >-
+      La implementación de referencia de AWS es una máquina de estados, y un
+      paso que falla siempre debería abrir el circuito en lugar de compensar
+      la misma transacción una y otra vez.
   - patron: retry-con-backoff-y-jitter
     tipo: se combina con
     porque: >-

@@ -1,0 +1,383 @@
+---
+titulo: Circuit breaker
+alias: Circuit breaker
+familia: Fiabilidad
+estado: listo
+dificultad: 3
+intencion: >-
+  Dejar de llamar a un servicio que lleva un rato fallando, para convertir una
+  espera cara en un error barato y no arrastrar a tu propio servicio con la
+  caída del vecino.
+verificado_en: "2026-09-06"
+servicios: [lambda, step-functions, dynamodb, cloudwatch]
+relacionados:
+  - patron: retry-con-backoff-y-jitter
+    tipo: se combina con
+    porque: >-
+      Son las dos mitades de la misma decisión. El reintento trata el fallo
+      transitorio; el cortacircuitos trata el fallo que ya no lo es, y es lo que
+      apaga los reintentos cuando reintentar dejó de tener sentido.
+  - patron: concurrencia-reservada
+    tipo: se combina con
+    porque: >-
+      La concurrencia reservada pone el tope; el cortacircuitos evita que ese
+      tope se llene de llamadas que solo están esperando un timeout. Sin él, el
+      mamparo aguanta pero dentro no cabe nadie útil.
+  - patron: cola-punto-a-punto
+    tipo: compite con
+    porque: >-
+      Es la otra respuesta a una dependencia lenta, y suele ser mejor: si la
+      llamada puede ser asíncrona, una cola absorbe la caída entera sin que
+      nadie tenga que decidir cuándo abrir nada.
+  - patron: saga-orquestada-con-step-functions
+    tipo: se combina con
+    porque: >-
+      La implementación que propone AWS es una máquina de estados, y un paso de
+      saga que falla siempre debería abrir el circuito en vez de compensar la
+      misma transacción una y otra vez.
+---
+
+import CircuitoEspera from '../../components/diagrama/CircuitoEspera.astro';
+import CircuitoEstados from '../../components/diagrama/CircuitoEstados.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu servicio llama a otro de forma síncrona y el otro se cae. La intuición dice
+que eso produce errores; lo que produce en realidad es algo peor: **produce
+esperas**.
+
+Un servicio caído raramente contesta "estoy caído". Lo normal es que no conteste
+nada, y entonces quien decide cuánto dura el fallo no es él sino **tu timeout**.
+Con tres segundos de timeout, cada llamada condenada te cuesta tres segundos.
+
+<CircuitoEspera />
+
+En serverless eso se traduce a números incómodos de inmediato. A 100 peticiones
+por segundo con 3 s de timeout necesitas **300 ejecuciones concurrentes** solo
+para ir fallando. Si tenías `reservedConcurrency` puesto —y deberías—, el
+mamparo se llena de llamadas que ya sabemos que van a fallar, y las peticiones
+que iban a otros sitios que sí funcionan empiezan a recibir `429`.
+
+Ahí es donde la caída de otro **se convierte en la tuya**. No porque
+dependieras de él, sino porque esperarle te agotó los recursos con los que
+atendías todo lo demás.
+
+Y hay dos agravantes:
+
+- **Los reintentos multiplican la espera.** Con tres intentos y backoff, esos
+  3 s pasan a ser 10 o 12. El [reintento con backoff](/patrones/retry-con-backoff-y-jitter/)
+  es lo correcto para un fallo transitorio; contra un servicio que lleva diez
+  minutos caído, es gasolina.
+- **Pagas por esperar.** Lambda factura duración. Un incidente de media hora en
+  una dependencia es media hora de facturar funciones que no hacen nada más que
+  mirar un socket.
+
+<Caja tipo="clave">
+El coste real de una dependencia caída no son los errores: es el **tiempo que
+tardas en aceptarlos**. Un cortacircuitos no arregla la dependencia — convierte
+una espera de 3 s en un error de 5 ms, que es lo único que estaba en tu mano.
+</Caja>
+
+## La solución
+
+Poner un objeto entre el que llama y el llamado que **lleva la cuenta de los
+fallos y deja de dejar pasar** cuando son demasiados. Es el patrón que popularizó
+Michael Nygard en *Release It*, y es literalmente la metáfora del diferencial de
+tu casa: salta solo, y hay que comprobar que la avería se fue antes de volver a
+subirlo.
+
+<CircuitoEstados />
+
+Tres estados, y el que decide si el patrón funciona es el tercero:
+
+- **Cerrado.** Todo pasa. Se cuentan los fallos.
+- **Abierto.** Nada pasa. El error se devuelve **sin salir a la red**, en
+  microsegundos. Se arranca un temporizador.
+- **Semiabierto.** Al expirar el temporizador se deja pasar **una** llamada de
+  prueba. Si funciona, se cierra; si falla, se vuelve a abrir y el temporizador
+  empieza otra vez.
+
+El semiabierto es el estado que casi nadie implementa, y sin él el patrón se
+vuelve contra ti: al expirar la espera pasan **todas** las llamadas a la vez
+contra un servicio que acaba de levantarse, y lo tiran otra vez. Es exactamente
+el mismo thundering herd que evita el jitter, un piso más arriba.
+
+### En serverless el estado no puede vivir en memoria
+
+Ésta es la diferencia que invalida casi todo lo que vas a leer sobre el patrón.
+Las implementaciones clásicas —Hystrix, resilience4j— guardan los contadores en
+la memoria del proceso, porque dan por hecho que hay **un** proceso.
+
+En Lambda hay N entornos de ejecución, cada uno con su memoria, creados y
+destruidos cuando a AWS le parece. Un cortacircuitos en memoria significa que
+cada entorno tiene que quemarse sus propios fallos por su cuenta: con 300
+entornos concurrentes hacen falta 300 circuitos independientes antes de que
+deje de llamarse a nadie, y para entonces el incidente ya pasó.
+
+Así que **el estado tiene que ser compartido y externo**. Es lo que hace la
+implementación de referencia de AWS, y es de donde salen todas las
+complicaciones interesantes de este patrón.
+
+## Cuándo usarlo
+
+Cuando la llamada cumple las tres condiciones a la vez:
+
+- **Es síncrona.** Alguien está esperando la respuesta.
+- **Sale de tu proceso.** Otro microservicio tuyo, una API de terceros, una base
+  de datos con pool de conexiones.
+- **Puede fallar durante minutos, no milisegundos.** Un despliegue roto, una
+  caída, una base de datos con contención.
+
+Y hay tres casos en los que **no** lo quieres, que valen tanto como los de
+arriba:
+
+**Ya lo tienes puesto.** Toda llamada a un servicio de AWS a través de un SDK
+oficial pasa por la *retry quota*: un cubo de 500 fichas que se vacía cuando
+demasiadas peticiones fallan y hace que el cliente devuelva el error sin
+reintentar. Es un cortacircuitos en miniatura, por instancia de cliente, y
+empieza a actuar por encima de un ~22% de fallo sostenido. Montar otro encima de
+DynamoDB para proteger llamadas a DynamoDB es de las cosas más divertidas que se
+ven en producción.
+
+**La llamada podía ser asíncrona.** Si entre los dos servicios cabe una cola, la
+cola es mejor respuesta: absorbe la caída entera, no hay que decidir cuándo
+abrir nada y los mensajes siguen ahí cuando el otro vuelve. El cortacircuitos es
+lo que se pone cuando **no** se puede quitar la sincronía.
+
+**La dependencia ya falla rápido.** Si te devuelve `503` en 20 ms, no hay espera
+que ahorrar. El patrón te daría el mismo error un poco antes, a cambio de una
+lectura de DynamoDB por llamada.
+
+## Cómo implementarlo
+
+La implementación de referencia de AWS usa **workflows Express de Step
+Functions** para el flujo de decisión y una tabla de **DynamoDB** para el
+estado. La tabla se llama `CircuitStatus` y guarda **solo los servicios
+degradados**: si no hay registro vigente para el llamado, el circuito está
+cerrado.
+
+El flujo tiene cuatro pasos:
+
+1. `Get Circuit Status` consulta `CircuitStatus` por el nombre del servicio.
+2. `Is Circuit Closed` es un estado `Choice`. Si el estado es `OPEN`, va a un
+   estado `Fail` llamado `Circuit Open` y la ejecución termina ahí.
+3. Si no, `Execute Lambda` hace la llamada de verdad, con su `Retry` y su
+   backoff exponencial.
+4. Si la llamada agota los reintentos, se **inserta un registro** en
+   `CircuitStatus` con un `ExpiryTimeStamp`, y el workflow sale en `FAIL`.
+
+### La tabla
+
+| Atributo | Para qué |
+| --- | --- |
+| `ServiceName` | clave de partición — el servicio llamado |
+| `CircuitStatus` | `OPEN` |
+| `ExpiryTimeStamp` | epoch en segundos: **hasta cuándo** sigue abierto |
+
+Y ahora la parte que parece un detalle y no lo es. La consulta **no pregunta si
+existe el registro**: pregunta si existe uno con `ExpiryTimeStamp` mayor que
+ahora. El borrado se deja a **TTL de DynamoDB**, que sirve para limpiar la tabla
+y para nada más.
+
+<Caja tipo="clave">
+**TTL no es un temporizador.** DynamoDB borra los elementos expirados
+*"típicamente en unos pocos días"* después de su vencimiento, y mientras tanto
+**siguen apareciendo en tus `Query` y `Scan`**. Si tu circuito se cierra porque
+el registro "ya no está", puede quedarse abierto durante días.
+
+Por eso el estado lo decide la comparación de timestamps y TTL solo recoge la
+mesa. Es también la razón por la que AWS recomienda filtrar los elementos
+expirados con una *filter expression* en cualquier lectura.
+</Caja>
+
+### La alternativa más rápida
+
+AWS dice explícitamente que la tabla se puede sustituir por un almacén en
+memoria como **ElastiCache (Redis OSS)** para mejor rendimiento. Tiene sentido:
+estás añadiendo una lectura al camino crítico de **todas** las llamadas, no solo
+de las que fallan.
+
+Y hay una versión intermedia que en la práctica es la que más se usa: leer el
+estado de DynamoDB y **cachearlo en el ámbito de módulo** de la Lambda durante
+unos segundos. Se paga una lectura cada N segundos por entorno en vez de una por
+petición, a cambio de que el circuito tarde hasta N segundos en abrirse para
+todo el mundo. Casi siempre es el trato correcto.
+
+## El código
+
+**El estado `Choice` que decide.** Es el corazón del patrón, y son unas pocas líneas
+de Amazon States Language:
+
+```json
+"Is Circuit Closed": {
+  "Type": "Choice",
+  "Choices": [
+    {
+      "Variable": "$.CircuitStatus",
+      "StringEquals": "OPEN",
+      "Next": "Circuit Open"
+    },
+    {
+      "Variable": "$.CircuitStatus",
+      "StringEquals": "",
+      "Next": "Execute Lambda"
+    }
+  ]
+},
+"Circuit Open": { "Type": "Fail" }
+```
+
+**Abrir el circuito sin moverlo eternamente.** Es la consideración que AWS
+menciona y que casi nadie implementa: si el servicio se llama desde muchos hilos
+a la vez, **el primer fallo debe fijar el vencimiento** y los siguientes no
+deben empujarlo hacia adelante, o el circuito no se cierra nunca. Una escritura
+condicional lo resuelve:
+
+```python
+# Solo abre si no había circuito, o si el que había ya venció.
+# Sin esta condición, cada fallo concurrente aplaza el cierre otros 30 s.
+tabla.put_item(
+    Item={
+        "ServiceName": servicio,
+        "CircuitStatus": "OPEN",
+        "ExpiryTimeStamp": ahora + 30,
+    },
+    ConditionExpression=(
+        "attribute_not_exists(ServiceName) "
+        "OR ExpiryTimeStamp < :ahora"
+    ),
+    ExpressionAttributeValues={":ahora": ahora},
+)
+```
+
+**El semiabierto, que es una elección de un solo probador.** La misma escritura
+condicional sirve para que, al vencer el circuito, **solo una** invocación se
+lleve el derecho a probar y las demás sigan fallando rápido:
+
+```python
+errores = tabla.meta.client.exceptions
+
+
+def puedo_probar(servicio, ahora):
+    """Devuelve True a una sola invocación por ventana: la que
+    consiga reservar el turno. Las demás siguen viendo el
+    circuito abierto."""
+    try:
+        tabla.update_item(
+            Key={"ServiceName": servicio},
+            UpdateExpression="SET ExpiryTimeStamp = :siguiente",
+            ConditionExpression="ExpiryTimeStamp <= :ahora",
+            ExpressionAttributeValues={
+                ":ahora": ahora,
+                ":siguiente": ahora + 30,
+            },
+        )
+        return True
+    except errores.ConditionalCheckFailedException:
+        return False
+```
+
+Si la prueba funciona se borra el registro y el circuito queda cerrado; si falla,
+el vencimiento que acaba de escribir esa misma llamada ya deja el circuito
+abierto otros 30 segundos. No hace falta nada más.
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="El cortacircuitos también se cae">
+Has metido una lectura de DynamoDB en el camino de todas tus llamadas. La
+pregunta que hay que responder **antes** de desplegarlo es: ¿qué pasa cuando lo
+que falla es esa lectura?
+
+Hay dos respuestas y las dos son defendibles, pero tiene que ser una decisión
+escrita:
+
+- **Fallar abierto** (dejar pasar): si no sé el estado, llamo. El
+  cortacircuitos deja de protegerte justo durante un incidente grande, que es
+  cuando lo necesitabas.
+- **Fallar cerrado** (bloquear): si no sé el estado, no llamo. Un problema en tu
+  tabla de estado tumba un servicio que estaba perfectamente sano.
+
+Por defecto, casi siempre quieres **fallar abierto** y alarmar: es peor
+inventarse una caída que no proteger de una real.
+</Caja>
+
+**El rebaño del semiabierto.** Sin elección de probador, al vencer el
+temporizador pasan de golpe todas las llamadas que se habían acumulado. El
+servicio que acababa de levantarse se cae otra vez y el circuito se reabre. El
+síntoma es un sistema que oscila con un periodo exactamente igual a tu
+temporizador.
+
+**El vencimiento que nunca llega.** Si cada fallo concurrente reescribe
+`ExpiryTimeStamp` sin condición, el circuito se queda abierto mientras haya
+tráfico — es decir, para siempre.
+
+**Confiar en que TTL borre a tiempo.** Ya está arriba, pero es el error que más
+caro sale porque no se manifiesta en pruebas: con poco tráfico, TTL parece
+puntual. Nunca uses la existencia del elemento como estado.
+
+**El estado por contenedor.** Un cortacircuitos en una variable global de Lambda
+"funciona" en local y no hace nada en producción. Cada entorno de ejecución
+cuenta sus fallos por separado.
+
+**La factura del camino feliz.** El patrón cobra en las llamadas que **van
+bien**: una lectura de DynamoDB, y si usas la implementación con Step Functions,
+además una ejecución Express con su latencia. Protege del 0,1% de las llamadas
+cobrando en el 99,9%.
+
+**Express es al-menos-una-vez.** Los workflows Express no garantizan ejecución
+única. Para abrir el circuito da igual —escribir dos veces el mismo `OPEN` es
+inofensivo—, pero si metes efectos de negocio en ese workflow, necesitas
+[idempotencia](/patrones/idempotencia-en-consumidores/).
+
+**Un circuito abierto es silencioso.** AWS lo pone entre sus consideraciones y
+tiene toda la razón: hay que **registrar y alarmar** las llamadas rechazadas por
+el circuito. Si no, el sistema entra en modo degradado y nadie se entera —
+porque desde fuera se ve rápido y sin errores de timeout.
+
+**Tus métricas van a empeorar cuando funcione.** Un cortacircuitos convierte
+esperas en errores, así que la tasa de error **sube** y la latencia baja. Es el
+patrón haciendo su trabajo. Si tu alarma es "tasa de error alta" a secas, vas a
+recibir una página justo cuando la mitigación está funcionando.
+
+## Coste
+
+| Concepto | Cuándo se paga |
+| --- | --- |
+| Lectura de `CircuitStatus` | en **todas** las llamadas, fallen o no |
+| Escritura al abrir | solo al abrir y al probar — despreciable |
+| TTL de DynamoDB | **gratis**, no consume capacidad de escritura |
+| Ejecución Express de Step Functions | por duración y memoria, en todas las llamadas |
+| Lo que te ahorra | duración de Lambda esperando timeouts, más los reintentos |
+
+La cuenta es sencilla y conviene hacerla de verdad. Una lectura eventualmente
+consistente de un elemento pequeño es de los tres o cuatro pagos más baratos de
+AWS; una Lambda de 1 GB esperando tres segundos, no. El patrón sale a cuenta en
+cuanto la dependencia tiene incidentes con alguna regularidad, y **no sale a
+cuenta** si la dependencia lleva dos años sin caerse — ahí solo has añadido
+latencia y una pieza que puede romperse.
+
+La versión cacheada en ámbito de módulo cambia la aritmética por completo: una
+lectura cada 5 segundos por entorno en vez de una por petición. Si vas a poner
+este patrón en un camino de alto volumen, empieza por ahí.
+
+## Fuentes
+
+Intención del patrón, motivación, aplicabilidad, las consideraciones
+—implementación agnóstica del servicio, cierre por el llamado, el vencimiento
+que no debe moverse con llamadas concurrentes, la posibilidad de forzar el
+estado y la necesidad de observabilidad—, la arquitectura con workflows Express
+de Step Functions, la tabla `CircuitStatus` con `ExpiryTimeStamp`, el uso de TTL
+para borrar los expirados, la sugerencia de sustituir DynamoDB por ElastiCache y
+los fragmentos de Amazon States Language:
+[Circuit breaker pattern — AWS Prescriptive Guidance](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/circuit-breaker.html).
+El borrado *"típicamente en unos pocos días"*, que los elementos expirados siguen
+apareciendo en `Query` y `Scan` hasta que se borran, la recomendación de
+filtrarlos, el formato del atributo TTL y que el borrado no consume capacidad de
+escritura:
+[Using time to live (TTL) in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/howitworks-ttl.html).
+La *retry quota* del SDK como cortacircuitos ya incorporado, con sus 500 fichas y
+el umbral del ~22%:
+[Retry behavior — AWS SDKs and Tools Reference Guide](https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html).
+El patrón es anterior a AWS: lo popularizó Michael Nygard en *Release It*, como
+la propia guía de AWS reconoce.
