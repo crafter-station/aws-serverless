@@ -1,7 +1,256 @@
 ---
 titulo: Claim-check
+alias: Claim-check
 familia: Comunicación
-estado: esbozo
+estado: listo
+dificultad: 1
+intencion: Guardar el contenido pesado en S3 y hacer viajar por el sistema de mensajería solo una referencia, para que los límites de tamaño de los mensajes dejen de decidir tu arquitectura.
+verificado_en: "2026-09-06"
+servicios: [s3, sns, sqs, lambda, step-functions]
+relacionados:
+  - patron: fan-out
+    tipo: se combina con
+    porque: >-
+      En un fan-out el techo lo pone SNS con sus 256 KiB, y es el más bajo de
+      toda la cadena. El claim-check es lo que hace que ese techo deje de
+      importar.
+  - patron: presigned-urls
+    tipo: se combina con
+    porque: >-
+      Los dos parten de la misma idea. La URL prefirmada es cómo el cliente
+      deposita o recoge el payload que el claim-check referencia.
+  - patron: saga-orquestada-con-step-functions
+    tipo: se combina con
+    porque: >-
+      Entre estados de Step Functions solo caben 256 KiB, y el fallo llega a
+      mitad del proceso con la mitad de los efectos ya aplicados. Pasar la clave
+      en vez del documento evita ese muro.
 ---
 
-Por escribir.
+import ClaimCheck from '../../components/diagrama/ClaimCheck.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu sistema procesa facturas. Cuando llega una, publicas un evento con los datos
+para que el resto reaccione. Un día alguien adjunta el PDF al evento y todo se
+rompe.
+
+El motivo es que **cada tramo de un sistema serverless tiene su propio techo de
+tamaño, y son distintos**:
+
+| Tramo | Techo |
+| --- | --- |
+| Publicación en SNS | 256 KiB |
+| Mensaje en SQS | 1 MiB |
+| Payload síncrono de Lambda | 6 MB |
+| Payload asíncrono de Lambda | 1 MB |
+| Payload de API Gateway | 10 MB |
+| Entrada o salida de un estado de Step Functions | 256 KiB |
+| Objeto en S3 | 48 TB |
+
+El que manda es **el más bajo de la cadena**, y casi nunca es el que estás
+mirando. Un evento de 400 KB cabe de sobra en tus colas y aun así el `Publish`
+de SNS lo rechaza. Un documento de 2 MB pasa por API Gateway y muere en la
+Lambda. Un JSON que crece estado a estado revienta a mitad de una saga, con la
+mitad de los efectos ya aplicados.
+
+<Caja tipo="clave">
+Un sistema de mensajería está para transportar **hechos**, no archivos. Cuando
+el mensaje pesa, el problema no es el límite: es que estás usando la cola como
+sistema de ficheros.
+</Caja>
+
+## La solución
+
+Separar el contenido de la notificación. El productor guarda el payload en S3 y
+publica un mensaje minúsculo con la **referencia**: bucket, clave, y los
+metadatos que los consumidores necesitan para decidir si les interesa.
+
+<ClaimCheck />
+
+El nombre viene de la ficha del guardarropa: dejas el abrigo, te llevas un
+número. Por el sistema circula el resguardo, y el abrigo se queda quieto donde
+lo dejaste.
+
+Tres ventajas, y la tercera es la que no se ve al principio:
+
+- **Los límites desaparecen.** El mensaje pesa unos cientos de bytes, así que
+  ningún tramo de la cadena lo rechaza.
+- **Es más barato.** SNS y SQS facturan por porciones de 64 KB: un mensaje de
+  256 KB cuenta como cuatro peticiones. Con una referencia, cuenta como una.
+- **El consumidor decide si descarga.** Un consumidor que solo necesita saber
+  que hubo una factura no baja nada. Antes, todos pagaban el peso de todos.
+
+## Cuándo usarlo
+
+- El payload **puede** superar el límite de algún tramo, aunque casi nunca lo
+  haga. Basta con que ocurra el día del pico.
+- El contenido es **binario**: PDF, imagen, audio, vídeo.
+- Hay **varios consumidores** y solo alguno necesita el contenido completo.
+- Vas a pasar datos **entre estados de Step Functions**, donde el techo son
+  256 KiB y el fallo llega tarde.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **El payload es pequeño y siempre lo será.** Un evento de 2 KB no necesita
+  esto: añades una escritura, una lectura, permisos de S3 y un ciclo de vida
+  que mantener.
+- **El consumidor necesita el contenido siempre.** Si el 100 % descarga el
+  100 % de las veces, has añadido latencia sin ahorrar nada. Sigue mereciendo
+  la pena si el tamaño rompe límites, pero no lo vendas como optimización.
+- **Necesitas atomicidad entre el mensaje y el contenido.** Son dos escrituras a
+  dos sistemas: puede existir el mensaje sin el objeto. Ver trampas.
+- **Ya usas las Extended Client Libraries.** SNS y SQS tienen bibliotecas que
+  hacen exactamente esto por debajo —hasta 2 GB apoyándose en S3—. Si tu
+  runtime tiene una, es este mismo patrón sin escribirlo.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Escribe primero en S3, publica después.** Al revés garantiza mensajes que
+   apuntan a nada.
+2. **Genera la clave con un identificador del hecho**, no con un nombre de
+   archivo del usuario.
+3. **Mete en el mensaje los metadatos que permiten filtrar** —tipo, tamaño,
+   propietario— para que un consumidor pueda descartar sin descargar. Es lo que
+   hace que las filter policies sigan sirviendo.
+4. **Versiona el formato del mensaje**: un campo `v` que te deje cambiar la
+   forma de la referencia más adelante.
+5. **Pon una regla de ciclo de vida** en el prefijo del claim-check. El payload
+   sobrevive al mensaje si nadie lo borra.
+6. **Da permiso de lectura a los consumidores** sobre ese prefijo, no sobre el
+   bucket entero.
+
+## El código
+
+```ts
+// ── Productor ──────────────────────────────────────────────────────
+const clave = `claims/${new Date().toISOString().slice(0, 10)}/${ulid()}`;
+
+// Primero el contenido. Si esto falla, no hay mensaje huerfano.
+await s3.send(new PutObjectCommand({
+  Bucket: BUCKET,
+  Key: clave,
+  Body: pdf,
+  ContentType: 'application/pdf',
+}));
+
+await sns.send(new PublishCommand({
+  TopicArn: TOPIC,
+  // El mensaje lleva la referencia y lo justo para decidir sin descargar.
+  Message: JSON.stringify({
+    v: 1,
+    tipo: 'FacturaRecibida',
+    facturaId: factura.id,
+    proveedor: factura.proveedor,
+    importe: factura.importe,
+    contenido: { bucket: BUCKET, clave, bytes: pdf.length },
+  }),
+  MessageAttributes: {
+    tipo: { DataType: 'String', StringValue: 'FacturaRecibida' },
+  },
+}));
+```
+
+```ts
+// ── Consumidor que NO necesita el PDF ──────────────────────────────
+export const registrarFactura = async (evento: SQSEvent) => {
+  for (const r of evento.Records) {
+    const m = JSON.parse(r.body);
+    // Le basta con los metadatos: no toca S3 en ningun momento.
+    await guardar({ id: m.facturaId, proveedor: m.proveedor, importe: m.importe });
+  }
+};
+
+// ── Consumidor que SI lo necesita ──────────────────────────────────
+export const extraerTexto = async (evento: SQSEvent) => {
+  for (const r of evento.Records) {
+    const m = JSON.parse(r.body);
+    const obj = await s3.send(new GetObjectCommand({
+      Bucket: m.contenido.bucket,
+      Key: m.contenido.clave,
+    }));
+    await indexar(m.facturaId, await extraer(obj.Body));
+  }
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · El mensaje puede sobrevivir al objeto">
+Son dos sistemas y dos escrituras, así que caben los dos desajustes:
+
+- **Objeto sin mensaje** si el `Publish` falla después del `PutObject`. Es el
+  caso benigno: sobra un archivo y el ciclo de vida se lo lleva.
+- **Mensaje sin objeto** si publicas antes de guardar, o si una regla de ciclo
+  de vida borra el payload mientras el mensaje sigue en una DLQ esperando a que
+  alguien lo reprocese. Ese es el que rompe.
+
+Dos defensas: guardar siempre antes de publicar, y que la retención de S3 sea
+**más larga que la de las colas y sus DLQ**. Es el mismo razonamiento que en la
+DLQ, cuya retención debe superar a la de la cola de origen.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · El consumidor necesita permisos que antes no necesitaba">
+Antes, el consumidor solo hablaba con la cola. Ahora tiene que leer de S3, y
+eso es una política nueva por cada consumidor y por cada cuenta.
+
+En arquitecturas multi-cuenta esto se complica de verdad: el bucket necesita una
+política que permita leer a los roles de las otras cuentas, y si el objeto está
+cifrado con KMS, también permisos sobre la clave. Es el coste oculto del patrón,
+y no aparece hasta que alguien despliega en otra cuenta.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · El filtrado deja de funcionar si vacías el mensaje">
+Es tentador reducir el mensaje a `{ bucket, clave }` y ya. El problema es que
+las filter policies de SNS miran los atributos del mensaje, y las reglas de
+EventBridge miran su JSON: si ahí no queda nada, **todos los consumidores se
+despiertan con todo** y descartan después de descargar.
+
+Has cambiado el coste del transporte por el coste de invocar a todo el mundo.
+Deja en el mensaje lo suficiente para decidir sin abrir la maleta.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Nadie limpia el guardarropa">
+El payload en S3 no caduca solo. Los mensajes se procesan y desaparecen; los
+objetos se quedan, se acumulan y se facturan.
+
+Una regla de ciclo de vida sobre el prefijo del claim-check no es opcional. Y
+ojo con el plazo: si es más corto que la retención de tus colas, vuelves a la
+trampa 1.
+</Caja>
+
+## Coste
+
+| Concepto | Con payload en el mensaje | Con claim-check |
+| --- | --- | --- |
+| Petición de SNS (256 KB) | 4 peticiones | 1 |
+| Petición de SQS (256 KB) | 4 peticiones | 1 |
+| Escritura en S3 | — | 1 PUT |
+| Lectura en S3 | — | 1 GET **por consumidor que lo necesite** |
+| Almacenamiento | — | mientras dure el ciclo de vida |
+
+La regla de los 64 KB es la que decide: SNS y SQS facturan cada porción de
+64 KB como una petición, así que un mensaje de 256 KB cuesta cuatro. Con la
+referencia cuesta una, y a cambio pagas un PUT y los GET de quien de verdad
+descargue.
+
+El patrón gana claramente cuando **hay más consumidores que descargas**: cinco
+consumidores de los que solo uno abre el PDF pagan un transporte barato cinco
+veces y una lectura cara una vez. Pierde si todos descargan siempre y los
+mensajes eran pequeños — pero entonces tampoco tenías un problema de tamaño.
+
+## Fuentes
+
+Tamaño máximo de mensaje de SNS y regla de facturación por porciones de 64 KB:
+[Amazon SNS endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/sns.html).
+Tamaño máximo de mensaje de SQS y Extended Client Libraries hasta 2 GB:
+[Amazon SQS message quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html).
+Payloads síncrono y asíncrono de Lambda:
+[Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html).
+Límite de 256 KiB entre estados de Step Functions:
+[Step Functions service quotas](https://docs.aws.amazon.com/step-functions/latest/dg/limits-overview.html).
+Tamaño máximo de objeto en S3:
+[Amazon S3 endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/s3.html).

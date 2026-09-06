@@ -18,6 +18,12 @@ relacionados:
     porque: >-
       El redrive reinyecta mensajes que quizá se procesaron a medias. Sin
       idempotencia, vaciar una DLQ es una forma estupenda de duplicar efectos.
+  - patron: concurrencia-reservada
+    tipo: se combina con
+    porque: >-
+      Poner un tope de concurrencia no hace desaparecer el trabajo: lo acumula
+      en la cola. Con un backlog grande, los mensajes pueden agotar su retención
+      antes de que les llegue el turno.
   - patron: saga-orquestada-con-step-functions
     tipo: compite con
     porque: >-

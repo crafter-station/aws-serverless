@@ -1,0 +1,26 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={392}
+  tono="bien"
+  titulo="El productor guarda el payload grande en S3 y publica en SNS solo una referencia de unos cientos de bytes. El consumidor recibe la referencia y va a buscar el contenido a S3 cuando lo necesita."
+  pie="<strong>Por el sistema de mensajería viaja el resguardo, no la maleta.</strong> El límite de 256 KiB de SNS deja de importar porque el mensaje pesa unos cientos de bytes, y el consumidor decide si necesita descargar el contenido o le basta con los metadatos."
+>
+  <Nodo x={30}  y={160} icono="aws-lambda" titulo="productor" />
+  <Nodo x={244} y={52}  icono="amazon-simple-storage-service" titulo="S3" sub="payload · 3 MB" />
+  <Nodo x={244} y={256} icono="amazon-simple-notification-service" titulo="SNS" sub="referencia · 200 B" />
+  <Nodo x={496} y={256} icono="aws-lambda" titulo="consumidor" />
+
+  <Flecha de={[84, 174]}  a={[242, 84]}  curva={-12} etiqueta="1 · guarda el payload" ex={-16} ey={-12} />
+  <Flecha de={[84, 194]}  a={[242, 282]} curva={12} etiqueta="2 · publica la clave" ex={-10} ey={26} tipo="evento" />
+  <Flecha de={[300, 282]} a={[494, 282]} tipo="evento" etiqueta="referencia" ey={-11} />
+  <Flecha de={[520, 254]} a={[292, 110]} curva={16} etiqueta="3 · lee el payload solo si lo necesita" ex={70} ey={16} />
+
+  <Etiqueta x={350} y={378} texto="El techo de 256 KiB de SNS deja de aplicar · el ciclo de vida de S3 se encarga de la limpieza" />
+</Diagrama>

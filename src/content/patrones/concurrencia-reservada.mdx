@@ -1,7 +1,256 @@
 ---
 titulo: Concurrencia reservada como aislamiento
+alias: Reserved concurrency
 familia: Escala
-estado: esbozo
+estado: listo
+dificultad: 2
+intencion: Repartir el bote de concurrencia de la cuenta para que ninguna función pueda quedarse con todo, y de paso poner un tope a las que hablan con dependencias que no escalan como Lambda.
+verificado_en: "2026-09-06"
+servicios: [lambda, sqs, dynamodb]
+relacionados:
+  - patron: cold-start
+    tipo: se combina con
+    porque: >-
+      Se configuran en la misma pantalla y hacen cosas opuestas: la reservada
+      limita cuánto puede escalar una función, la aprovisionada precalienta
+      entornos. Confundirlas es el error habitual.
+  - patron: dlq-y-redrive
+    tipo: se combina con
+    porque: >-
+      Poner un tope no hace desaparecer el trabajo: lo acumula en la cola. Con
+      un backlog grande y un tope bajo, los mensajes pueden agotar su retención
+      antes de procesarse.
 ---
 
-Por escribir.
+import PoolConcurrencia from '../../components/diagrama/PoolConcurrencia.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Un lunes por la mañana alguien lanza una importación masiva. Su función empieza
+a escalar —para eso está Lambda— y en pocos minutos hay novecientas
+invocaciones en vuelo.
+
+Y entonces **tu checkout empieza a devolver errores**.
+
+No has desplegado nada. El checkout no ha cambiado. Lo que ha pasado es que la
+concurrencia de Lambda **es un bote de la cuenta y la región**, no de la
+función: mil ejecuciones simultáneas por defecto, repartidas por orden de
+llegada entre todo lo que tengas desplegado.
+
+<PoolConcurrencia />
+
+Es el modo de fallo más desagradable de Lambda porque **cruza fronteras entre
+equipos**. Una función de un proyecto que nadie mira puede tirar la API de
+producción de otro, y el equipo del checkout va a pasar la mañana buscando el
+problema en su código, donde no está.
+
+Y hay una segunda cara del mismo problema. Lambda escala más rápido que casi
+cualquier cosa a la que llame: mil entornos cada diez segundos, por función.
+Si detrás hay una base de datos relacional con cien conexiones, o el API de un
+tercero con su propio límite, **Lambda no está absorbiendo el pico: se lo está
+pasando entero al eslabón que no aguanta**.
+
+<Caja tipo="clave">
+El escalado automático sin límites no es una virtud: es un cañón apuntando a lo
+que tengas detrás. La pregunta no es cuánto puede escalar una función, sino
+**cuánto debería**.
+</Caja>
+
+## La solución
+
+Repartir el bote explícitamente. La **concurrencia reservada** aparta un trozo
+para una función concreta, y hace dos cosas a la vez que conviene entender bien
+porque suelen contarse solo la mitad:
+
+> Reserved concurrency **establece a la vez el máximo y el mínimo** de
+> instancias concurrentes asignadas a tu función. Cuando una función tiene
+> concurrencia reservada, ninguna otra función puede usar esa concurrencia.
+
+Es decir: es **suelo y techo en la misma configuración**.
+
+- Como **suelo**, garantiza que el checkout siempre tendrá sus 200, pase lo que
+  pase con el resto de la cuenta.
+- Como **techo**, impide que el importador pase de 300 y ahogue a la base de
+  datos o al bote común.
+
+Casi siempre quieres las dos cosas, pero por motivos distintos: reservas para
+proteger lo crítico, y limitas para proteger lo que está detrás.
+
+Además **no cuesta nada**: a diferencia de la concurrencia aprovisionada,
+configurar concurrencia reservada no añade ningún cargo.
+
+## Cuándo usarlo
+
+- Tienes **funciones críticas** compartiendo cuenta con trabajos por lotes,
+  importadores o entornos de prueba.
+- Una función habla con algo que **no escala como Lambda**: una base de datos
+  relacional, un ERP, un API de terceros con cuota.
+- Quieres **apagar una función** sin borrarla: reservada a 0 la detiene en seco.
+- Consumes una cola con un backlog enorme y necesitas **marcar el ritmo** de
+  drenado.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Solo tienes una función.** Reservar cuando no hay con quién competir es
+  ceremonia.
+- **Creías que evita cold starts.** No precalienta nada. Eso es concurrencia
+  aprovisionada, que sí cuesta dinero.
+- **No has medido.** La métrica `ConcurrentExecutions` te dice qué usa cada
+  función. Reservar a ojo suele significar reservar de más y estrangular al
+  resto sin darte cuenta.
+- **El trabajo no puede esperar.** Un tope convierte el exceso en cola o en
+  throttling. Si el trabajo es urgente y no encola, limitar es perder
+  peticiones.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Mide con `ConcurrentExecutions`** por función, durante un periodo que
+   incluya un pico real.
+2. **Estima con la fórmula**: `concurrencia = peticiones por segundo × duración
+   media en segundos`.
+3. **Reserva para lo crítico** un valor por encima del pico observado.
+4. **Limita lo peligroso** al ritmo que aguante su dependencia, no al que
+   aguante Lambda.
+5. **Deja holgura sin reservar** para todo lo demás — y recuerda que el sistema
+   te obliga a dejar al menos 100.
+6. **Vigila `Throttles`.** Un tope sin alarma es un cuello de botella invisible.
+
+## El código
+
+```bash
+# Reservar 200 para el checkout: es su suelo y su techo a la vez.
+aws lambda put-function-concurrency \
+  --function-name checkout --reserved-concurrent-executions 200
+
+# Apagar una funcion en seco, sin borrarla ni tocar sus disparadores.
+aws lambda put-function-concurrency \
+  --function-name importador --reserved-concurrent-executions 0
+
+# Quitar el limite y devolver la funcion al bote comun.
+aws lambda delete-function-concurrency --function-name importador
+```
+
+```ts
+import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as cw from 'aws-cdk-lib/aws-cloudwatch';
+
+// Critica: se reserva por encima del pico medido, para garantizar cupo.
+const checkout = new lambda.Function(this, 'Checkout', {
+  runtime: lambda.Runtime.NODEJS_22_X,
+  handler: 'index.handler',
+  code: lambda.Code.fromAsset('dist/checkout'),
+  reservedConcurrentExecutions: 200,
+});
+
+// Peligrosa: se limita al ritmo que aguanta la base de datos de detras,
+// no al que aguanta Lambda.
+const importador = new lambda.Function(this, 'Importador', {
+  runtime: lambda.Runtime.NODEJS_22_X,
+  handler: 'index.handler',
+  code: lambda.Code.fromAsset('dist/importador'),
+  reservedConcurrentExecutions: 30,
+});
+
+// Un tope sin alarma es un cuello de botella invisible: lo que antes era
+// un error ruidoso pasa a ser una cola que crece en silencio.
+new cw.Alarm(this, 'AlarmaThrottles', {
+  metric: importador.metricThrottles({ period: cdk.Duration.minutes(5) }),
+  threshold: 1,
+  evaluationPeriods: 2,
+  comparisonOperator: cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+  treatMissingData: cw.TreatMissingData.NOT_BREACHING,
+});
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · La regla de las 100 unidades">
+No puedes repartir el bote entero. La documentación es explícita: **puedes
+reservar como mucho el cupo sin reservar menos 100**. Esas 100 unidades quedan
+siempre para las funciones que no reservan nada.
+
+Con un límite de cuenta de 1 000, no puedes reservar 1 000 a una función, ni
+sumar 1 000 entre varias. Y el error aparece al guardar, sin explicar de dónde
+sale el número.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · Lo reservado se resta aunque no se use">
+Esta es la que sorprende: si reservas 100 para `funcion-a`, **el resto de tus
+funciones se reparten 900 aunque `funcion-a` esté completamente ociosa**. La
+concurrencia reservada no es una prioridad ni una preferencia: es una
+sustracción del bote común.
+
+Consecuencia práctica: reservar generosamente "por si acaso" en varias funciones
+estrangula a todas las demás de forma permanente. Reserva por medición, no por
+prudencia.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Poner un tope no hace desaparecer el trabajo">
+Limitar una función que consume una cola no reduce el trabajo: lo acumula. La
+cola crece, y si el backlog es grande y el tope bajo, **los mensajes pueden
+agotar su retención** —4 días por defecto, 14 como máximo— antes de que les
+llegue el turno.
+
+Un tope necesita, siempre, una alarma sobre la profundidad de la cola y sobre la
+edad del mensaje más antiguo. Si no, has cambiado un incidente ruidoso por una
+pérdida silenciosa de datos.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Reservada y aprovisionada se confunden todo el rato">
+Están en la misma pantalla de la consola y hacen cosas distintas:
+
+| | Reservada | Aprovisionada |
+| --- | --- | --- |
+| Qué hace | reparte el cupo | precalienta entornos |
+| Efecto en el arranque en frío | **ninguno** | lo elimina |
+| Coste | **ninguno** | por entorno y hora |
+| Es también un techo | sí | no |
+
+Poner reservada creyendo que quitas cold starts es el error más común, y encima
+introduce un límite de escalado que no querías.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Algunas fuentes traen su propio techo">
+Hay orígenes de eventos con un máximo de concurrencia propio que **la
+concurrencia reservada no cambia**. Con Amazon MQ, por ejemplo, son 5
+instancias concurrentes para ActiveMQ y **1** para RabbitMQ.
+
+Si configuras reservada esperando que suba y no sube, mira si el límite viene de
+la fuente y no de Lambda.
+</Caja>
+
+## Coste
+
+**Configurar concurrencia reservada no cuesta nada.** Es una de las pocas
+palancas de AWS que mejora la fiabilidad sin aparecer en la factura.
+
+Lo que sí mueve dinero es su efecto indirecto, y en las dos direcciones:
+
+| Efecto | Consecuencia en la factura |
+| --- | --- |
+| Techo en una función desbocada | menos invocaciones — **ahorra** |
+| Menos presión sobre la base de datos | menos throttling y menos reintentos — **ahorra** |
+| Backlog acumulado en colas | más sondeos y más tiempo de retención — **suma un poco** |
+| Cupo reservado y sin usar | ningún cargo, pero **capacidad desperdiciada** |
+
+Ese último punto es el coste real y no se ve: reservar 300 para una función que
+usa 40 no te cobra nada, pero deja 260 unidades inutilizables para el resto de
+la cuenta. Es un coste de oportunidad, y solo aparece el día que otra función
+empieza a recibir `Throttles` sin motivo aparente.
+
+## Fuentes
+
+Semántica de suelo y techo, ausencia de cargo, regla de reservar como mucho el
+cupo sin reservar menos 100, comportamiento del cupo reservado y sin usar,
+apagado con reservada a 0, límites propios de Amazon MQ y fórmula de estimación
+de concurrencia:
+[Configuring reserved concurrency for a function](https://docs.aws.amazon.com/lambda/latest/dg/configuration-concurrency.html).
+Límite por defecto de 1 000 ejecuciones concurrentes, velocidad de escalado y
+cuotas reducidas en cuentas nuevas:
+[Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html).
+Retención por defecto y máxima de una cola SQS:
+[Amazon SQS message quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html).

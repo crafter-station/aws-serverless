@@ -1,0 +1,40 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+// Escala: 1 unidad de concurrencia ≈ 0,5 px de lienzo. El bote son 1 000.
+const X = 150;
+---
+
+<Diagrama
+  ancho={700}
+  alto={330}
+  titulo="Dos repartos del mismo bote de 1 000 ejecuciones concurrentes de la cuenta. Sin reserva, una función desbocada consume casi todo y deja sin cupo a las demás. Con reserva, cada función crítica tiene su porción garantizada y la desbocada tiene un tope."
+  pie="<strong>La concurrencia reservada es a la vez suelo y techo.</strong> Garantiza ese cupo a la función y le impide pasar de ahí. Lo que reserva deja de estar disponible para las demás <em>aunque no lo use</em>."
+>
+  <Barra
+    x={X} y={56} titulo="Sin reservar"
+    sub="El importador se desboca y el checkout se queda sin cupo"
+    segmentos={[
+      { etiqueta: 'importador · 900', ancho: 450, tono: 'init' },
+      { etiqueta: 'resto', ancho: 50, tono: 'espera' },
+    ]}
+  />
+
+  <Barra
+    x={X} y={168} titulo="Con reserva"
+    sub="Cada crítica tiene su suelo; la desbocada, su techo"
+    segmentos={[
+      { etiqueta: 'checkout · 200', ancho: 100, tono: 'handler' },
+      { etiqueta: 'importador · 300', ancho: 150, tono: 'init' },
+      { etiqueta: 'sin reservar · 500', ancho: 250, tono: 'espera' },
+    ]}
+  />
+
+  <Etiqueta x={144} y={78} texto="1 000" ancla="end" />
+  <Etiqueta x={144} y={190} texto="1 000" ancla="end" />
+
+  <Etiqueta x={350} y={280} texto="Regla dura: no se puede reservar más que el cupo sin reservar menos 100" estilo="peligro" />
+  <Etiqueta x={350} y={304} texto="Esas 100 unidades quedan siempre para las funciones que no reservan nada" />
+</Diagrama>
