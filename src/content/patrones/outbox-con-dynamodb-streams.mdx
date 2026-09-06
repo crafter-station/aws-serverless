@@ -20,11 +20,11 @@ relacionados:
       El elemento de outbox vive en la misma tabla que el dato, detrás de su
       propio prefijo. Sin tabla compartida no hay transacción que compartir.
   - patron: saga-por-coreografia
-    tipo: se construye encima de
+    tipo: se combina con
     porque: >-
       Una saga coreografiada encadena servicios que reaccionan a los eventos de
-      otros. Sin outbox, cada eslabón puede perder su evento y la cadena se
-      corta en silencio.
+      otros, y se apoya en este patrón: sin outbox, cada eslabón puede perder su
+      evento y la cadena se corta en silencio.
 ---
 
 import OutboxProblema from '../../components/diagrama/OutboxProblema.astro';

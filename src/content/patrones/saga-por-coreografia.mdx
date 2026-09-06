@@ -1,7 +1,272 @@
 ---
 titulo: Saga por coreografía
+alias: Choreographed saga
 familia: Fiabilidad
-estado: esbozo
+estado: listo
+dificultad: 3
+intencion: >-
+  Coordinar una operación que toca varios servicios sin director: cada uno
+  reacciona al evento del anterior y publica el suyo, y las compensaciones son
+  también eventos a los que alguien reacciona.
+verificado_en: "2026-09-06"
+servicios: [eventbridge, sns, sqs, lambda, dynamodb]
+relacionados:
+  - patron: saga-orquestada-con-step-functions
+    tipo: compite con
+    porque: >-
+      Mismo problema, reparto opuesto. Allí un director conoce todos los pasos y
+      los ve en un dibujo; aquí nadie los conoce y añadir un participante no
+      toca a los demás. Se elige por dónde quieres pagar.
+  - patron: fan-out
+    tipo: se construye encima de
+    porque: >-
+      Cada eslabón de la cadena es un fan-out: uno publica un hecho y quien
+      quiera reacciona. La saga es lo que emerge de encadenarlos.
+  - patron: outbox-con-dynamodb-streams
+    tipo: se construye encima de
+    porque: >-
+      Cada servicio tiene que cambiar su estado y publicar su hecho sin que
+      quepa perder uno de los dos. Sin outbox, un eslabón que falla al publicar
+      corta la cadena en silencio.
+  - patron: pubsub-con-eventbridge
+    tipo: se combina con
+    porque: >-
+      Hace falta un sitio donde publicar sin conocer a los demás. Con reglas por
+      contenido, cada participante declara a qué eventos reacciona sin que nadie
+      mantenga un registro de canales.
 ---
 
-Por escribir.
+import CoreografiaCadena from '../../components/diagrama/CoreografiaCadena.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Confirmar un pedido son tres cosas repartidas en tres servicios: reservar el
+stock, cobrar el pago y avisar al almacén. No hay transacción que abarque las
+tres, así que hace falta un plan para cuando una falle a mitad.
+
+La [saga orquestada](/patrones/saga-orquestada-con-step-functions/) resuelve eso
+con un director: una máquina de estados que conoce los tres pasos, los llama en
+orden y sabe qué compensar. Funciona muy bien, y tiene un precio que se paga en
+otra moneda:
+
+- **Alguien es dueño del proceso completo.** El equipo que mantiene la máquina
+  de estados tiene que entender el negocio de los tres servicios.
+- **Añadir un participante toca al director.** Un cuarto paso —antifraude, por
+  ejemplo— significa que otro equipo modifique y despliegue *tu* definición.
+- **El director conoce a todos.** Es un punto de acoplamiento que crece con cada
+  proceso nuevo.
+
+En una organización con varios equipos, eso se convierte en una cola de
+peticiones sobre quien mantiene las máquinas de estados.
+
+<Caja tipo="clave">
+La pregunta no es cuál de las dos es mejor. Es **dónde prefieres pagar**: en
+acoplamiento organizativo, o en visibilidad del proceso.
+</Caja>
+
+## La solución
+
+Quitar al director. Cada servicio hace lo suyo, publica el hecho que resulta, y
+se desentiende. Quien esté interesado, reacciona.
+
+<CoreografiaCadena />
+
+`pedidos` publica `PedidoCreado`. `stock` reacciona, reserva, y publica
+`StockReservado`. `pagos` reacciona e intenta cobrar; si falla, publica
+`PagoFallido`. Y `stock`, que también escucha ese evento, libera la reserva.
+
+Lo importante es lo que **no** hay:
+
+- Nadie llama a nadie. Todo son publicaciones y suscripciones.
+- **La compensación es otro evento más.** Nadie ordena deshacer; alguien
+  reacciona a que algo salió mal.
+- Cada servicio conoce **solo sus eventos de entrada y de salida**, nunca el
+  proceso completo.
+
+Por eso añadir un cuarto participante es gratis para los otros tres: el
+antifraude se suscribe a `PedidoCreado` y ya está. Nadie modifica nada, nadie
+despliega nada, nadie se entera.
+
+## Cuándo usarlo
+
+- **Varios equipos** son dueños de sus servicios y nadie debe ser dueño del
+  proceso entero.
+- Se espera que **aparezcan participantes** que hoy no existen.
+- Los pasos son **razonablemente independientes** y la cadena es corta: tres o
+  cuatro eslabones.
+- Ya tienes un bus de eventos y la cultura de publicar hechos.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **La cadena es larga.** A partir de cuatro o cinco eslabones, nadie —persona
+  ni sistema— es capaz de decir qué pasa cuando falla el tercero. Ahí quieres un
+  director.
+- **Necesitas ver dónde va cada pedido.** No existe "el estado del proceso": hay
+  que reconstruirlo correlacionando trazas de varios servicios. Si la pregunta
+  "¿por qué se quedó a medias el pedido 4711?" se hace a menudo, esto te va a
+  doler.
+- **El orden de los pasos importa mucho.** Ni SNS ni EventBridge garantizan
+  orden. La cadena impone secuencia porque cada eslabón espera al anterior, pero
+  dos eventos independientes pueden llegar en cualquier orden.
+- **Hay que cancelar el proceso a mitad.** Sin director no hay a quién decírselo.
+  Cancelar exige un evento que todos escuchen y respeten, y eso es disciplina
+  que hay que sostener.
+- **Es un equipo pequeño con un solo dominio.** El beneficio principal de la
+  coreografía es organizativo. Sin varios equipos, estás pagando la
+  invisibilidad sin cobrar el desacoplamiento.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Nombra los eventos como hechos pasados** y trátalos como contrato público:
+   `PedidoCreado`, `StockReservado`, `PagoFallido`. Con versión en el payload.
+2. **Un identificador de correlación en todos**, el mismo de punta a punta. Es
+   lo único que después permitirá reconstruir el proceso.
+3. **Cada servicio publica con outbox**, en la misma transacción que su cambio
+   de estado. Sin eso, un eslabón que falla al publicar corta la cadena y nadie
+   se entera.
+4. **Cola SQS entre el bus y cada consumidor**, con su DLQ.
+5. **Consumidores idempotentes.** Toda la cadena es "al menos una vez".
+6. **Define los eventos de compensación** con el mismo cuidado que los de éxito:
+   `PagoFallido` es tan parte del contrato como `PagoCompletado`.
+7. **Dibuja la cadena en algún sitio**, aunque el código no la contenga. Un
+   diagrama en el repositorio es lo único que va a evitar que nadie entienda el
+   proceso dentro de seis meses.
+
+## El código
+
+```ts
+// ── stock: reacciona a un hecho y publica el suyo ───────────────────
+export const reservarStock = async (evento: EventBridgeEvent<'PedidoCreado', Pedido>) => {
+  const pedido = evento.detail;
+
+  // Idempotencia: la entrega es al menos una vez, siempre.
+  if (await yaReservado(pedido.id)) return;
+
+  // Cambiar el estado y encolar el hecho en la MISMA transaccion.
+  // Es el patron outbox: si no se publica el evento, tampoco se reserva.
+  await ddb.send(new TransactWriteCommand({
+    TransactItems: [
+      { Put: { TableName: 'stock', Item: reserva(pedido) } },
+      { Put: { TableName: 'stock', Item: outbox({
+          tipo: 'StockReservado',
+          correlacion: pedido.correlacion,   // el hilo de toda la cadena
+          detalle: { pedidoId: pedido.id, unidades: pedido.unidades },
+        }) } },
+    ],
+  }));
+};
+```
+
+```ts
+// ── stock, otra vez: la compensacion es solo otra suscripcion ───────
+// Nadie le ordena deshacer. Escucha PagoFallido igual que escuchaba
+// PedidoCreado, y actua.
+export const liberarStock = async (evento: EventBridgeEvent<'PagoFallido', Fallo>) => {
+  const { pedidoId } = evento.detail;
+  if (!(await hayReserva(pedidoId))) return;   // idempotente
+  await liberar(pedidoId);
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · El proceso no existe en ningún sitio">
+Es la trampa estructural del patrón, y no tiene arreglo: **no hay un artefacto
+que describa la saga**. Está repartida entre las suscripciones de cinco
+servicios, y solo existe entera en la cabeza de quien la diseñó.
+
+La consecuencia práctica llega el día del primer incidente: "el pedido 4711 se
+quedó a medias" obliga a mirar los logs de cinco servicios y correlacionarlos a
+mano. Sin un identificador de correlación en todos los eventos, ni eso.
+
+Es exactamente lo que la orquestación te da gratis con su dibujo de la
+ejecución. Al elegir coreografía estás vendiendo esa visibilidad a cambio de
+desacoplamiento.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · Las cadenas de eventos se convierten en marañas">
+Con tres eslabones se entiende. Con siete servicios, cada uno escuchando tres
+eventos y publicando dos, tienes un grafo que nadie puede razonar y en el que
+**es fácil crear un ciclo sin darse cuenta**: A publica algo que hace reaccionar
+a B, que publica algo que hace reaccionar a A.
+
+Un ciclo en coreografía no da un error: da un bucle infinito que factura. La
+única defensa real es limitar la longitud de las cadenas y dibujarlas.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Un eslabón que no publica corta la cadena en silencio">
+Si `stock` reserva pero falla al publicar `StockReservado`, el pedido se queda
+esperando para siempre. No hay excepción, no hay timeout, no hay nadie
+comprobando que el proceso avanza: **el pedido simplemente deja de existir para
+el sistema**.
+
+Por eso el outbox no es opcional aquí. Y aun con outbox conviene un proceso de
+barrido que busque sagas atascadas: pedidos con reserva y sin pago pasado un
+tiempo razonable. Ese barrido es, irónicamente, un pequeño director.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Nadie sabe cuándo ha terminado">
+En una orquestación, la ejecución llega a un estado final y eso es "terminado".
+Aquí no hay estado final: hay eventos que dejan de ocurrir.
+
+Si el negocio necesita saber cuándo se completó un pedido, alguien tiene que
+escuchar el último evento y escribirlo en algún sitio. Ese alguien empieza a
+parecerse sospechosamente a un director, y conviene reconocerlo pronto en vez de
+descubrirlo tarde.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Los eventos son contrato público">
+En cuanto un servicio publica un hecho, cualquiera puede suscribirse — incluidos
+equipos que no conoces. Cambiar el nombre de un campo deja de ser un refactor
+interno y pasa a ser un cambio incompatible en una API pública.
+
+Versiona el payload desde el primer evento. Es barato al principio e imposible
+después.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · La compensación puede llegar antes que la acción">
+No hay orden garantizado. En una cadena rápida, `PagoFallido` puede llegar a
+`stock` **antes** de que su propia reserva se haya confirmado, y el consumidor
+de la compensación no encuentra nada que deshacer.
+
+Se maneja haciendo la compensación tolerante —si no hay reserva, no hacer nada e
+idempotente— pero hay que pensarlo, porque el caso parece imposible hasta que
+ocurre.
+</Caja>
+
+## Coste
+
+| Concepto | Efecto |
+| --- | --- |
+| Publicaciones en el bus | ~1,00 USD / millón en EventBridge, ~0,50 en SNS |
+| Colas y consumidores | uno por participante y por evento escuchado |
+| Transiciones de estado | **ninguna** — no hay máquina de estados |
+| Tiempo de depuración | **sube**, y no aparece en la factura |
+
+Frente a la orquestación, la coreografía **elimina el coste de las transiciones
+de estado**, que en Step Functions Standard es la línea dominante: una saga de
+seis pasos a un millón de ejecuciones son seis millones de transiciones. Aquí
+son publicaciones y consumos, que salen bastante más baratos.
+
+Lo que sube es el coste humano, y sube en el peor momento: durante un incidente,
+cuando hay que reconstruir a mano por dónde iba un proceso que no está escrito
+en ningún sitio. Ese coste no está en ninguna calculadora y es el que
+verdaderamente decide entre los dos patrones.
+
+## Fuentes
+
+Ausencia de garantías de orden, destinos por regla y throughput por región en
+EventBridge:
+[Amazon EventBridge quotas](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-quota.html).
+Entrega al menos una vez de SNS y SQS, que obliga a la idempotencia de todos los
+eslabones:
+[Amazon SQS standard queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html)
+y [Amazon SNS message delivery retries](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html).
+Semántica exactamente-una-vez de Step Functions Standard, usada en la
+comparación con la orquestación:
+[Choosing workflow type in Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html).
+`TransactWriteItems` como base del outbox de cada eslabón:
+[Amazon DynamoDB Transactions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html).

@@ -1,7 +1,259 @@
 ---
 titulo: Pub/sub con EventBridge
+alias: Content-based routing
 familia: Comunicación
-estado: esbozo
+estado: listo
+dificultad: 2
+intencion: Publicar eventos en un bus donde cada consumidor declara con un patrón qué le interesa, de modo que el productor no conozca ni un solo destino y añadir consumidores no toque nada.
+verificado_en: "2026-09-06"
+servicios: [eventbridge, lambda, sqs, s3]
+relacionados:
+  - patron: fan-out
+    tipo: compite con
+    porque: >-
+      Mismo problema, distinto reparto de fuerzas. SNS es más rápido, más barato
+      y aguanta más; EventBridge da enrutado por contenido, archivo y replay. Si
+      necesitas replay, la decisión ya está tomada.
+  - patron: saga-por-coreografia
+    tipo: se combina con
+    porque: >-
+      Una saga coreografiada necesita un sitio donde cada servicio publique sus
+      hechos sin conocer a los demás. Es el uso más natural de un bus.
 ---
 
-Por escribir.
+import BusReglas from '../../components/diagrama/BusReglas.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Empezaste con un topic de SNS llamado `pedidos` y funcionaba. Luego alguien
+necesitó solo los pedidos de España, así que apareció `pedidos-es`. Después
+alguien quiso solo los de importe alto, y nació `pedidos-grandes`. Hoy tienes
+veinte topics, una convención de nombres que nadie recuerda y un productor que
+publica en cinco sitios distintos.
+
+El acoplamiento **no desapareció al usar un topic**. Se mudó: ahora vive en el
+nombre del canal, y cada consumidor nuevo con un criterio nuevo obliga a crear
+un topic y a tocar el productor para que publique también ahí.
+
+Es el mismo problema que resolvía el fan-out, un nivel más arriba: seguimos
+pidiendo al productor que sepa quién escucha.
+
+<Caja tipo="clave">
+Mientras el productor elija el canal, el productor conoce a sus consumidores.
+La pregunta es si se puede publicar **en un solo sitio** y dejar que sea el
+consumidor quien declare qué quiere.
+</Caja>
+
+## La solución
+
+Un bus, y reglas que miran **dentro** del evento.
+
+<BusReglas />
+
+El productor publica siempre en el mismo bus y no declara destinos. Cada
+consumidor crea una regla con un patrón sobre el JSON del evento:
+
+```json
+{
+  "detail-type": ["PedidoCreado"],
+  "detail": {
+    "pais": ["ES"],
+    "importe": [{ "numeric": [">", 500] }]
+  }
+}
+```
+
+Nadie tuvo que crear un topic `pedidos-españa-grandes`. El productor no sabe que
+esa regla existe, no se entera si mañana desaparece, y **añadir un cuarto
+consumidor no toca una sola línea de lo que ya funciona**.
+
+Esa es la propiedad que hace que EventBridge escale *organizativamente*: el
+coste de sumar un equipo que reacciona a tus eventos deja de recaer sobre ti.
+
+### El archivo es lo que suele decidir de verdad
+
+Un bus puede **archivar** los eventos que pasan por él y **reproducirlos**
+después. Es lo que SNS estándar no tiene y no va a tener.
+
+Lo que conviene saber antes de contar con ello:
+
+- La retención se configura en días, y **por defecto es indefinida**.
+- Puedes filtrar con un patrón **qué se archiva**, no hace falta guardarlo todo.
+- Un replay solo puede ir **al mismo bus de origen**, opcionalmente limitado a
+  reglas concretas.
+- Reproducir **no consume** el archivo: puedes repetirlo tantas veces como
+  quieras.
+- Los eventos reproducidos llegan con un campo `replay-name`, que permite
+  distinguirlos — y que EventBridge usa para no volver a archivarlos.
+
+## Cuándo usarlo
+
+- Publican **varios equipos** en el mismo sitio y no quieres coordinar un
+  registro de topics.
+- Los consumidores quieren **subconjuntos distintos** del mismo flujo, definidos
+  por el contenido y no por el canal.
+- Necesitas **replay**: recuperarte de un bug, o alimentar una funcionalidad
+  nueva con el pasado.
+- Quieres reaccionar a **eventos de los propios servicios de AWS** — que además
+  llegan al bus por defecto sin coste.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Fan-out simple sin filtros.** Si todos los consumidores quieren todos los
+  eventos, SNS es más rápido, más barato y aguanta más. Las reglas no aportan
+  nada cuando no filtras.
+- **Throughput alto fuera de las tres regiones grandes.** `PutEvents` baja a
+  2 400, a 1 200, a 600 o a **400 por segundo** según dónde despliegues.
+- **Necesitas orden.** No hay ordenación de ningún tipo, ni siquiera por clave.
+- **Latencia mínima en un camino crítico.** Evaluar patrones cuesta más que
+  copiar un mensaje a una cola.
+- **Un evento tiene que llegar a más de cinco sitios.** El límite de destinos
+  por regla es duro; hay que partir en varias reglas.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Crea un bus propio.** El bus por defecto recibe además los eventos de todos
+   los servicios de AWS de tu cuenta; mezclar ahí tus eventos de dominio
+   complica patrones y permisos.
+2. **Fija un esquema de eventos**: `source`, `detail-type` y un `detail` con
+   versión. Los patrones se escriben contra esos campos, así que son contrato.
+3. **Una regla por consumidor lógico**, no una regla gigante con cinco destinos.
+4. **Cola SQS entre la regla y la función** cuando el consumidor deba aguantar
+   picos o caídas, igual que en un fan-out.
+5. **DLQ en cada destino.** Si el destino falla, EventBridge reintenta y luego
+   descarta.
+6. **Archivo desde el principio** si algún día vas a querer replay: no se puede
+   archivar hacia atrás.
+
+## El código
+
+```ts
+// ── Publicar: el productor no nombra ningun destino ────────────────
+await eb.send(new PutEventsCommand({
+  Entries: [{
+    EventBusName: 'app',
+    Source: 'pedidos',
+    DetailType: 'PedidoCreado',
+    Detail: JSON.stringify({ v: 1, id, pais: 'ES', importe: 750 }),
+  }],
+}));
+```
+
+```ts
+// ── Suscribirse: el consumidor declara su patron ───────────────────
+new events.Rule(this, 'AntifraudePedidosGrandes', {
+  eventBus: bus,
+  eventPattern: {
+    source: ['pedidos'],
+    detailType: ['PedidoCreado'],
+    detail: { importe: [{ numeric: ['>', 500] }] },
+  },
+  // Una cola en medio para que el consumidor absorba picos y caidas,
+  // exactamente por la misma razon que en un fan-out con SNS.
+  targets: [new targets.SqsQueue(colaAntifraude, {
+    deadLetterQueue: dlqAntifraude,
+  })],
+});
+
+// El archivo hay que crearlo ANTES: no se archiva hacia atras.
+new events.Archive(this, 'ArchivoPedidos', {
+  sourceEventBus: bus,
+  retention: cdk.Duration.days(90),
+  eventPattern: { source: ['pedidos'] },
+});
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · Cinco destinos por regla, y es un muro">
+El máximo son **5 targets por regla** y **no se amplía de ninguna manera**. No
+es un detalle administrativo: moldea el diseño desde el primer día.
+
+En cuanto un evento interesa a seis consumidores necesitas varias reglas con el
+mismo patrón, y eso cambia cómo organizas el bus y cómo lo despliegas. La
+alternativa habitual es una cola en medio que haga el reparto, pero entonces
+estás reintroduciendo el fan-out que querías evitar.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · El replay no respeta el orden, y va por minutos">
+Es la sorpresa del archivo. La documentación es explícita: los eventos **no se
+reproducen necesariamente en el mismo orden** en que entraron. El replay procesa
+por la hora del evento y avanza **en intervalos de un minuto**: primero todo el
+minuto uno, luego todo el minuto dos.
+
+Y hay que esperar antes de reproducir: AWS recomienda **dejar pasar 10 minutos**
+desde que el evento entró al bus, porque puede haber retraso hasta que llega al
+archivo. Reproducir demasiado pronto significa reproducir de menos.
+
+Dos límites más que aparecen tarde: **10 replays concurrentes** por cuenta y
+región, y EventBridge **borra los replays a los 90 días**.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Tu región no aguanta lo que dice el tutorial">
+`PutEvents` va a 10 000 por segundo en Virginia, Oregón e Irlanda. En Ohio,
+Fráncfort y España baja a 2 400; en Tokio, Sídney, Singapur y Londres a 1 200;
+en muchas otras a 600; y el suelo son **400 por segundo**.
+
+Las invocaciones —eventos que encajan con una regla y salen hacia sus destinos—
+siguen la misma forma: 18 750 por segundo en las tres grandes y **750** en el
+resto. Superado el límite no se pierden: **se retrasan**, que es peor de
+diagnosticar.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Los patrones y los comodines son recursos escasos">
+El patrón de una regla cabe en **2 048 caracteres**. Una lista larga de valores
+permitidos lo agota antes de lo que parece, y entonces hay que dividir la regla.
+
+Y los comodines son un recurso contado: solo **30 reglas por bus** pueden usar
+wildcards en su patrón, y ese límite **no se ajusta**. Gástalos donde de verdad
+hagan falta.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · La política del bus limita el multi-cuenta">
+La política de recursos del bus tiene un techo de **10 240 caracteres** y crece
+cada vez que concedes acceso a otra cuenta. En una organización con muchas
+cuentas es un límite real, no teórico, y aparece justo cuando el patrón está
+funcionando bien y todo el mundo quiere publicar.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · Un patrón mal escrito falla en silencio">
+Si el patrón no encaja, no pasa nada: no hay error, no hay métrica en rojo, el
+evento simplemente no llega. Es el mismo modo de fallo que la suscripción de SNS
+sin permisos, y se diagnostica igual de mal.
+
+Vigila la métrica de invocaciones de cada regla. Una regla desplegada que nunca
+ha invocado a nadie es sospechosa por definición.
+</Caja>
+
+## Coste
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| Eventos personalizados | ~1,00 USD / millón |
+| Eventos de servicios de AWS al bus por defecto | **sin coste** |
+| Archivo | por GB almacenado |
+| Replay | por evento reproducido |
+
+Comparado con SNS —del orden de 0,50 USD por millón de publicaciones, con las
+entregas a SQS y Lambda gratis— **EventBridge sale claramente más caro por
+evento**. Estás pagando el enrutado por contenido, el archivo y el replay. Si no
+vas a usar ninguno de los tres, estás pagando de más por nada.
+
+Detalle que conviene aprovechar: reaccionar a un cambio de estado de EC2 o a un
+`Object Created` de S3 **no se factura** en el bus por defecto. Publicar tus
+propios eventos de dominio, sí.
+
+## Fuentes
+
+Destinos por regla, reglas con comodines, `PutEvents` e invocaciones por región,
+reglas y buses por cuenta, tamaño del patrón y de la política del bus:
+[Amazon EventBridge quotas](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-quota.html).
+Retención indefinida por defecto, filtrado del archivo, replay solo al bus de
+origen, ausencia de orden, intervalos de un minuto, recomendación de esperar 10
+minutos, 10 replays concurrentes, borrado a los 90 días y campo `replay-name`:
+[Archiving and replaying events in Amazon EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-archive.html).
+Cuotas de SNS usadas en la comparación:
+[Amazon SNS endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/sns.html).

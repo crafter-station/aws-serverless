@@ -113,7 +113,8 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
 - [x] 4. Desplegar en [`aws.crafter.run`](https://aws.crafter.run)
 - [x] 5a. Servicios de v1 completos: 6 de 6
 - [x] 5b. Patrones de v1 completos: 8 de 8
-- [ ] 7. Seguir el catálogo completo: 6 patrones más y ~6 servicios
+- [x] 7. Catálogo de patrones completo: 14 de 14, y el grafo cerrado
+- [ ] 8. Servicios de las familias que faltan (Kinesis, Cognito, CloudFront, CloudWatch)
 - [x] 6. Umbral de mostrar alcanzado: 4 servicios + 3 patrones
 
 ### Lo que el sistema resultó ser

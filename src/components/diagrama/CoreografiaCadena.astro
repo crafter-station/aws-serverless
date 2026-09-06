@@ -1,0 +1,28 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Cruz from './Cruz.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={352}
+  titulo="Tres servicios encadenados por eventos sin director: pedidos publica PedidoCreado, stock reacciona y publica StockReservado, pagos reacciona y falla publicando PagoFallido, al que stock reacciona liberando la reserva."
+  pie="<strong>Nadie dirige, y nadie tiene la foto completa.</strong> Cada servicio conoce solo sus eventos de entrada y de salida — que es lo que hace barato añadir un cuarto — pero el proceso completo no está escrito en ningún sitio, y eso es lo que se paga al depurarlo."
+>
+  <Nodo x={40}  y={110} icono="aws-lambda" titulo="pedidos" />
+  <Nodo x={300} y={110} icono="aws-lambda" titulo="stock" />
+  <Nodo x={560} y={110} icono="aws-lambda" titulo="pagos" />
+
+  <Flecha de={[94, 136]}  a={[298, 136]} tipo="evento" etiqueta="PedidoCreado" ey={-11} />
+  <Flecha de={[354, 136]} a={[558, 136]} tipo="evento" etiqueta="StockReservado" ey={-11} />
+
+  <Cruz x={612} y={114} />
+
+  <Flecha de={[572, 168]} a={[358, 168]} curva={-28} tipo="fallo" etiqueta="PagoFallido · stock lo escucha y libera la reserva" ey={44} />
+
+  <Etiqueta x={350} y={302} texto="La compensación es otro evento más: nadie ordena deshacer, alguien reacciona" />
+  <Etiqueta x={350} y={326} texto="Ningún componente sabe en qué punto del proceso está el pedido" estilo="peligro" />
+</Diagrama>

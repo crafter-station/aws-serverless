@@ -1,0 +1,42 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const FILAS = [48, 158, 268];
+const REGLAS = [
+  { patron: 'importe > 500', destino: 'antifraude' },
+  { patron: 'todos los pedidos', destino: 'analítica' },
+  { patron: 'pais = ES', destino: 'facturación ES' },
+];
+---
+
+<Diagrama
+  ancho={700}
+  alto={384}
+  tono="bien"
+  titulo="Un productor publica en un bus de EventBridge. Tres reglas independientes examinan el JSON de cada evento con su propio patrón y entregan a su destino solo lo que encaja. El productor no conoce ninguna de las tres."
+  pie="<strong>El consumidor declara lo que le interesa; el productor no declara destinos.</strong> Añadir una cuarta regla no toca nada de lo que ya existe — ni el productor se entera de que apareció, ni de que mañana desaparezca."
+>
+  <Nodo x={26}  y={158} icono="aws-lambda" titulo="crearPedido" />
+  <Nodo x={176} y={158} icono="amazon-event-bridge" titulo="bus" sub="pedidos" />
+
+  <Marco x={302} y={16} ancho={380} alto={330} etiqueta="Reglas · cada una con su patrón" tono="bien" />
+
+  {REGLAS.map((r, i) => (
+    <Fragment>
+      <Nodo x={340} y={FILAS[i]} titulo="regla" sub={r.patron} />
+      <Nodo x={572} y={FILAS[i]} icono="aws-lambda" titulo={r.destino} />
+      <Flecha de={[396, FILAS[i] + 26]} a={[570, FILAS[i] + 26]} tipo="evento" />
+    </Fragment>
+  ))}
+
+  <Flecha de={[80, 184]}  a={[174, 184]} tipo="evento" />
+  <Flecha de={[230, 178]} a={[338, 80]}  curva={-10} />
+  <Flecha de={[230, 184]} a={[338, 184]} />
+  <Flecha de={[230, 190]} a={[338, 290]} curva={10} />
+
+  <Etiqueta x={350} y={372} texto="Máximo 5 destinos por regla, y no se amplía · el patrón cabe en 2 048 caracteres" estilo="peligro" />
+</Diagrama>
