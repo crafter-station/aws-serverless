@@ -2,6 +2,7 @@
 import { getEntries, type CollectionEntry } from 'astro:content';
 import { Icon } from '@aws-icons/astro';
 import Base from './Base.astro';
+import CopiarPagina from '../components/CopiarPagina.astro';
 
 interface Props {
   entrada: CollectionEntry<'patrones'>;
@@ -66,6 +67,7 @@ const ESCALONES = ['Directo', 'Intermedio', 'Delicado'];
               Verificado el <time datetime={d.verificado_en}>{d.verificado_en}</time>
             </span>
           )}
+          <CopiarPagina href={`/patrones/${entrada.id}.md`} />
         </div>
       </div>
     </div>
@@ -136,7 +138,7 @@ const ESCALONES = ['Directo', 'Intermedio', 'Delicado'];
     display: flex; justify-content: space-between; align-items: flex-end;
     gap: 1rem 2rem; flex-wrap: wrap; margin-top: 2rem;
   }
-  .cabecera__sellos { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .cabecera__sellos { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 
   .fila { display: flex; gap: .875rem; align-items: baseline; flex-wrap: wrap; }
   .fila__rotulo {

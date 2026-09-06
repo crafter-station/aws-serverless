@@ -2,6 +2,7 @@
 import type { CollectionEntry } from 'astro:content';
 import { Icon } from '@aws-icons/astro';
 import Base from './Base.astro';
+import CopiarPagina from '../components/CopiarPagina.astro';
 import { patronesQueUsan } from '../lib/coherencia';
 
 interface Props {
@@ -33,13 +34,14 @@ const apariciones = await patronesQueUsan(entrada.id);
 
       {d.en_una_frase && <p class="cabecera__frase">{d.en_una_frase}</p>}
 
-      {d.verificado_en && (
-        <p class="cabecera__sellos">
+      <div class="cabecera__sellos">
+        {d.verificado_en && (
           <span class="sello">
             Verificado el <time datetime={d.verificado_en}>{d.verificado_en}</time>
           </span>
-        </p>
-      )}
+        )}
+        <CopiarPagina href={`/servicios/${entrada.id}.md`} />
+      </div>
     </div>
 
     {d.los_3_conceptos && (
@@ -129,7 +131,10 @@ const apariciones = await patronesQueUsan(entrada.id);
     max-width: 38rem; margin: 1.5rem 0 0;
     font-family: var(--serif); font-size: 1.3125rem; line-height: 1.55; color: var(--tinta-suave);
   }
-  .cabecera__sellos { margin: 1.75rem 0 0; }
+  .cabecera__sellos {
+    display: flex; align-items: center; gap: .5rem;
+    flex-wrap: wrap; margin: 1.75rem 0 0;
+  }
 
   .seccion__titulo {
     margin: 0; font-size: 1.625rem; font-weight: 700; letter-spacing: -.015em;
