@@ -1,0 +1,31 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Cruz from './Cruz.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={330}
+  tono="roto"
+  titulo="El archivo del cliente viaja a través de API Gateway y de la función Lambda antes de llegar a S3. Cada salto impone su propio límite de tamaño y el más bajo gana."
+  pie="<strong>El archivo atraviesa dos servicios que no están para eso.</strong> API Gateway admite 10 MB y una Lambda síncrona 6 MB, así que el techo real son 6 MB — y mientras tanto pagas duración de Lambda por mover bytes de un sitio a otro."
+>
+  <Etiqueta x={40} y={24} texto="El archivo pasa por tu código" estilo="peligro" ancla="start" />
+
+  <Nodo x={26}  y={132} titulo="Cliente" sub="sube 40 MB" />
+  <Nodo x={196} y={132} icono="amazon-api-gateway" titulo="API Gateway" sub="techo: 10 MB" />
+  <Nodo x={366} y={132} icono="aws-lambda" titulo="subirArchivo" sub="techo: 6 MB" />
+  <Nodo x={548} y={132} icono="amazon-simple-storage-service" titulo="S3" sub="admite 48 TB" tenue />
+
+  <Flecha de={[80, 158]}  a={[194, 158]} etiqueta="40 MB" ey={-11} />
+  <Flecha de={[250, 158]} a={[364, 158]} tipo="fallo" />
+  <Flecha de={[420, 158]} a={[546, 158]} tipo="fallo" />
+
+  <Cruz x={307} y={158} />
+
+  <Etiqueta x={350} y={286} texto="Rechazado en el primer salto · el destino admitía el archivo de sobra" estilo="peligro" />
+  <Etiqueta x={350} y={310} texto="Y si cupiera, pagarías la duración de la Lambda por copiar bytes" />
+</Diagrama>

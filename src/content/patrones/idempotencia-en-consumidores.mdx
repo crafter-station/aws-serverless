@@ -31,6 +31,12 @@ relacionados:
     porque: >-
       El outbox garantiza que el evento se publica al menos una vez; quien lo
       consume necesita este patrón para que ese "al menos" no se note.
+  - patron: presigned-urls
+    tipo: se combina con
+    porque: >-
+      Una URL prefirmada se puede usar varias veces hasta que caduque, y el
+      evento que S3 emite al terminar la subida tampoco es exactamente-una-vez.
+      Quien reaccione a esos eventos tiene que soportar repetición.
   - patron: saga-orquestada-con-step-functions
     tipo: se combina con
     porque: >-

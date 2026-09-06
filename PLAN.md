@@ -112,7 +112,7 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
 - [x] 3. Extraer el sistema: esquemas Zod, plantillas, checks de build
 - [x] 4. Desplegar en [`aws.crafter.run`](https://aws.crafter.run)
 - [x] 5a. Servicios de v1 completos: 6 de 6
-- [ ] 5b. Patrones: 3 de 8 de v1 (quedan single-table, cold start, outbox, saga orquestada, presigned URLs)
+- [ ] 5b. Patrones: 7 de 8 de v1 (queda saga orquestada con Step Functions)
 - [x] 6. Umbral de mostrar alcanzado: 4 servicios + 3 patrones
 
 ### Lo que el sistema resultó ser

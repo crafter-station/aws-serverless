@@ -1,7 +1,283 @@
 ---
 titulo: Presigned URLs
+alias: Presigned URLs
 familia: Frontera
-estado: esbozo
+estado: listo
+dificultad: 2
+intencion: Dar al cliente una URL firmada y con caducidad para que suba o descargue directamente de S3, sin que el archivo atraviese tu API ni tus funciones.
+verificado_en: "2026-09-06"
+servicios: [s3, lambda, api-gateway]
+relacionados:
+  - patron: cold-start
+    tipo: compite con
+    porque: >-
+      La forma más rápida de eliminar un arranque en frío del camino de datos es
+      no invocar ninguna función en él. Este patrón saca a Lambda del transporte
+      y con ella el problema entero.
+  - patron: claim-check
+    tipo: se combina con
+    porque: >-
+      Los dos parten de la misma idea: el payload grande va a S3 y por el
+      sistema solo viaja una referencia. La URL prefirmada es cómo el cliente
+      deposita o recoge ese payload.
+  - patron: idempotencia-en-consumidores
+    tipo: se combina con
+    porque: >-
+      La subida dispara un evento de S3 que invoca una función. Esa entrega no
+      es exactamente-una-vez, y la misma clave puede subirse dos veces con la
+      misma URL, que se puede usar varias veces hasta que caduque.
 ---
 
-Por escribir.
+import PresignedProblema from '../../components/diagrama/PresignedProblema.astro';
+import PresignedSolucion from '../../components/diagrama/PresignedSolucion.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu aplicación deja subir un archivo. Lo natural es hacer lo mismo que harías con
+un servidor: un endpoint `POST /archivos`, el cliente manda el archivo, tu
+código lo recibe y lo guarda en S3.
+
+<PresignedProblema />
+
+En serverless eso choca contra tres muros, y el primero llega enseguida:
+
+**El tamaño.** API Gateway admite **10 MB** de payload. Una Lambda síncrona
+admite **6 MB**. El techo real de tu endpoint es el menor de los dos, así que
+son 6 MB — y S3, el destino, admitía **48 TB**. Has puesto dos porteros
+delante de un almacén que no necesitaba ninguno.
+
+**El coste.** Aunque el archivo cupiera, estás pagando duración de Lambda por
+copiar bytes de una conexión a otra. Es el trabajo más caro por unidad de valor
+que puede hacer una función: nada de lógica, solo transporte.
+
+**El tiempo.** Una subida lenta desde un móvil con mala cobertura mantiene viva
+tu invocación, consume concurrencia y corre contra el timeout de integración de
+29 segundos de API Gateway.
+
+<Caja tipo="clave">
+El archivo no necesita pasar por tu código. Necesita **permiso** para llegar a
+S3, y un permiso cabe en una URL.
+</Caja>
+
+## La solución
+
+Tu API deja de transportar y pasa a **autorizar**. Cuando el cliente quiere
+subir algo, pide permiso; tu Lambda comprueba quién es y qué puede hacer, firma
+una URL con caducidad, y responde. El cliente sube directamente a S3.
+
+<PresignedSolucion />
+
+Una URL prefirmada es una URL normal de S3 con la firma de una credencial en la
+query string. Quien la tenga puede hacer **esa operación concreta, sobre ese
+objeto concreto, hasta esa hora concreta**, sin credenciales de AWS y sin que
+toques la política del bucket.
+
+Los tres muros desaparecen a la vez: no hay techo de 6 MB porque nadie
+intermedia, no pagas duración porque tu función responde en milisegundos, y una
+subida de veinte minutos no consume nada tuyo.
+
+Cuando la subida termina, **S3 emite un evento** y ahí sí invocas una función
+—para validar, transcodificar, indexar— pero ya con el archivo quieto en su
+sitio y con la clave, no con los bytes.
+
+## Cuándo usarlo
+
+- **Subidas de usuario**: fotos, documentos, vídeos, adjuntos.
+- **Descargas privadas**: una factura que solo puede ver su dueño, sin hacer el
+  bucket público ni proxear el archivo.
+- **Intercambio con terceros** que no tienen ni deben tener credenciales de AWS.
+- Como pareja del **claim-check**: el productor deposita el payload grande y
+  manda la clave.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Necesitas validar el contenido antes de aceptarlo.** La URL prefirmada
+  acepta lo que le manden. La validación pasa a ser posterior, disparada por el
+  evento de S3, y hay que diseñar qué ocurre con lo que no pasa el filtro.
+- **El archivo es diminuto.** Para un JSON de 2 KB, dos viajes de red —pedir la
+  URL y luego subir— es peor que uno solo.
+- **Es contenido público y muy leído.** Ahí quieres CloudFront con caché, no una
+  URL firmada distinta por visitante que no se puede cachear.
+- **No puedes controlar quién comparte la URL.** AWS las llama, literalmente,
+  *bearer tokens*: quien la tenga, entra. Si el archivo es sensible y el enlace
+  puede acabar en un chat, hazla caducar en minutos.
+- **Necesitas límite de tamaño en la subida.** Un `PUT` prefirmado no lo
+  impone. Para eso está el **POST prefirmado**, que sí admite una condición de
+  rango de tamaño.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Autoriza en tu Lambda**: quién es el usuario y si puede escribir ahí. Esa
+   es toda la lógica que queda.
+2. **Genera tú la clave del objeto.** Nunca aceptes el nombre de archivo del
+   cliente tal cual (ver trampas).
+3. **Firma con caducidad corta.** Minutos para subir, no días.
+4. **Devuelve la URL y la clave.** El cliente sube; tu backend ya sabe dónde va
+   a aparecer.
+5. **Reacciona al evento de S3**, no a la respuesta del cliente: el cliente
+   puede subir y desaparecer sin decírtelo.
+6. **Pon CORS en el bucket** si el que sube es un navegador.
+7. **Ciclo de vida** que limpie las subidas incompletas y los archivos que
+   nadie confirmó.
+
+## El código
+
+```ts
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+
+const s3 = new S3Client({});
+
+export const firmarSubida = async (evento: APIGatewayProxyEventV2) => {
+  const usuario = autenticar(evento);
+  const { tipo } = JSON.parse(evento.body!);
+
+  if (!['image/jpeg', 'image/png', 'application/pdf'].includes(tipo)) {
+    return { statusCode: 400, body: 'tipo no admitido' };
+  }
+
+  // La clave la generamos NOSOTROS. El nombre que manda el cliente
+  // solo sirve para enseñarselo de vuelta, nunca para construir la ruta.
+  const clave = `subidas/${usuario.id}/${crypto.randomUUID()}`;
+
+  const url = await getSignedUrl(
+    s3,
+    new PutObjectCommand({
+      Bucket: process.env.BUCKET,
+      Key: clave,
+      ContentType: tipo,
+    }),
+    // Corto. Y ojo: si la credencial que firma caduca antes,
+    // manda la credencial. Ver trampas.
+    { expiresIn: 300 },
+  );
+
+  return { statusCode: 200, body: JSON.stringify({ url, clave }) };
+};
+```
+
+```ts
+// El trabajo de verdad ocurre cuando S3 avisa, no cuando el cliente
+// dice que ha terminado: el cliente puede subir y desaparecer.
+export const procesarArchivo = async (evento: S3Event) => {
+  for (const r of evento.Records) {
+    const clave = decodeURIComponent(r.s3.object.key.replace(/\+/g, ' '));
+    await validarYRegistrar(clave, r.s3.object.size);
+  }
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · Tu URL de 7 días dura una hora">
+Es la trampa que se lleva a todo el mundo por delante, y la documentación de AWS
+la explica sin ambigüedad: **una URL prefirmada caduca cuando caduca la
+credencial que la firmó, aunque hayas pedido más tiempo**.
+
+Los siete días máximos solo aplican con credenciales de **usuario IAM** y
+SigV4. Con credenciales temporales el techo es otro:
+
+| Quién firma | Caducidad real |
+| --- | --- |
+| Usuario IAM (SigV4) | hasta 7 días |
+| `AssumeRole` de STS | cuando acaba la sesión — **por defecto 1 hora** |
+| Perfil de instancia EC2 | mientras duren las credenciales — unas 6 horas |
+| Tarea de ECS | las credenciales rotan cada 1–6 horas |
+
+**Una Lambda firma con credenciales temporales.** Así que si generas la URL
+desde una función y pides `expiresIn: 604800`, no vas a tener siete días: vas a
+tener lo que dure la sesión del rol. Y no falla al firmar — falla después, en
+manos del cliente, con un `ExpiredToken`.
+
+Desde la consola el rango es aún más estrecho: de 1 minuto a 12 horas.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · Es un bearer token, y AWS lo dice así">
+La documentación es literal: las URL prefirmadas *"son bearer tokens que
+conceden acceso a quien las posee"*. No hay comprobación de identidad al usarla.
+Quien tenga el enlace —el destinatario, quien lea su chat, quien mire el
+historial del navegador— puede usarlo.
+
+Y **se puede usar varias veces** hasta que caduque; no es de un solo uso.
+
+Dos defensas que sí existen: la condición `s3:signatureAge` en la política del
+bucket, para rechazar firmas más viejas de N milisegundos aunque la URL diga
+otra cosa, y restricciones de red con `aws:SourceIp` o `aws:SourceVpc`.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Nunca construyas la clave con el nombre del cliente">
+Si tomas el nombre de archivo que manda el cliente y lo metes en la clave, le
+estás dejando elegir **dónde escribe**. Con la ruta adecuada puede sobrescribir
+el objeto de otro usuario — y S3, ante una clave que ya existe, **reemplaza sin
+avisar**.
+
+Genera tú la clave, con el identificador del usuario y un UUID. El nombre
+original, si lo necesitas para mostrarlo, va en los metadatos o en tu base de
+datos.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Un PUT prefirmado no limita el tamaño">
+La URL firmada autoriza la operación; no impone un máximo de bytes. Alguien con
+una URL válida puede subirte un archivo de gigabytes y lo vas a almacenar y
+pagar.
+
+Si necesitas un tope, la herramienta es el **POST prefirmado**, cuya política
+admite una condición de rango de tamaño. Es más incómodo de usar desde el
+navegador, y es la única forma de decir "como mucho 20 MB" antes de recibirlo.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · El cliente puede desaparecer a mitad">
+Con este patrón, el momento en que tu backend se entera de que hay un archivo
+nuevo es **el evento de S3**, no la respuesta del cliente. Si construyes el
+flujo sobre "el cliente me confirma que subió", vas a tener registros en tu base
+de datos sin archivo detrás cada vez que alguien cierre la pestaña.
+
+Y al revés: subidas multipart abortadas dejan partes huérfanas que **ocupan y se
+facturan sin aparecer en la lista de objetos**. Una regla de ciclo de vida que
+las borre no es opcional.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · CORS, y el 403 que no explica nada">
+Si el que sube es un navegador, el bucket necesita configuración de CORS con el
+método `PUT` y las cabeceras que envías. Sin ella el navegador bloquea la
+petición antes de salir, y lo que ves en la consola no menciona ni CORS ni S3.
+
+Y si la firma no cuadra —un reloj desincronizado, un proxy corporativo que toca
+las cabeceras, una cabecera firmada que no se envía— S3 responde
+`SignatureDoesNotMatch`, que tampoco te dice cuál de las tres cosas fue.
+</Caja>
+
+## Coste
+
+Aquí el patrón gana por goleada, y conviene ver por qué:
+
+| Concepto | Con proxy | Con URL prefirmada |
+| --- | --- | --- |
+| Duración de Lambda | la que tarde la subida | milisegundos |
+| Payload de API Gateway | 10 MB de techo | no interviene |
+| Techo real | **6 MB** | 48 TB |
+| Transferencia de entrada | pasa dos veces | una vez |
+| Petición de S3 | 1 PUT | 1 PUT |
+
+Lo que desaparece de la factura es **la duración de Lambda proporcional al
+tamaño del archivo**. Una función que tarda 8 segundos en recibir y reenviar
+5 MB pasa a tardar 20 milisegundos en firmar una cadena. Con 100 000 subidas al
+mes, esa es la diferencia entre una línea visible y una invisible.
+
+Subir a S3 no cuesta transferencia de entrada; lo que cuesta es **sacar** los
+archivos después. Si se descargan mucho, CloudFront delante.
+
+## Fuentes
+
+Caducidad máxima según el tipo de credencial, comportamiento con credenciales
+temporales, naturaleza de *bearer token*, reutilización, condición
+`s3:signatureAge`, restricciones de red y errores comunes:
+[Download and upload objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html).
+Tamaño máximo de objeto y de parte:
+[Amazon S3 endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/s3.html).
+Payload síncrono de Lambda y payload de API Gateway:
+[Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)
+y [Amazon API Gateway endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/apigateway.html).

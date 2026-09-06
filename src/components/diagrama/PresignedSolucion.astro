@@ -1,0 +1,32 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Nota from './Nota.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={352}
+  tono="bien"
+  titulo="El cliente pide permiso a la API, que responde con una URL prefirmada. Después el cliente sube el archivo directamente a S3 sin pasar por API Gateway ni por Lambda, y S3 avisa por evento cuando la subida termina."
+  pie="<strong>Tu código autoriza; no transporta.</strong> La Lambda genera una URL firmada y termina en milisegundos. Los bytes van del cliente a S3 por un camino donde no hay ni techo de 6 MB ni duración que pagar."
+>
+  <Etiqueta x={40} y={24} texto="El archivo va directo" estilo="bien" ancla="start" />
+
+  <Nodo x={40}  y={150} titulo="Cliente" sub="sube 40 MB" />
+  <Nodo x={220} y={68}  icono="amazon-api-gateway" titulo="API Gateway" />
+  <Nodo x={392} y={68}  icono="aws-lambda" titulo="firmarSubida" sub="responde en ms" />
+  <Nodo x={392} y={244} icono="amazon-simple-storage-service" titulo="S3" />
+  <Nodo x={572} y={244} icono="aws-lambda" titulo="procesarArchivo" tenue />
+
+  <Flecha de={[94, 162]}  a={[218, 100]} curva={-12} etiqueta="1 · pide permiso" ex={-24} ey={-12} />
+  <Flecha de={[274, 94]}  a={[390, 94]} />
+  <Flecha de={[390, 106]} a={[96, 168]} curva={-14} etiqueta="2 · URL firmada" ex={40} ey={26} tipo="evento" />
+
+  <Flecha de={[94, 190]}  a={[390, 262]} curva={14} etiqueta="3 · PUT directo a S3 · sin intermediarios" ey={30} />
+  <Flecha de={[448, 270]} a={[570, 270]} tipo="evento" etiqueta="evento" ey={-11} />
+
+  <Etiqueta x={350} y={340} texto="La URL caduca cuando dices tú — o cuando caduca la credencial que la firmó, lo que ocurra antes" estilo="peligro" />
+</Diagrama>

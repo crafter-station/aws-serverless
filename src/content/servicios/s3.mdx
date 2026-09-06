@@ -1,0 +1,200 @@
+---
+titulo: S3
+nombre_completo: Amazon Simple Storage Service
+icono: amazon-simple-storage-service
+estado: listo
+en_una_frase: >-
+  Un almacén de objetos con capacidad ilimitada y una clave de texto por
+  archivo: no tiene carpetas, no tiene append, y su rendimiento depende de cómo
+  nombras las cosas.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: No hay carpetas
+    explicacion: >-
+      La clave de un objeto es una cadena de texto y ya está. Las barras son una
+      convención que la consola dibuja como si fueran directorios, pero
+      "facturas/2026/09/x.pdf" es un nombre, no una ruta. No se puede renombrar
+      una carpeta porque no existe: hay que copiar objeto a objeto.
+  - termino: El rendimiento escala por prefijo
+    explicacion: >-
+      Cada prefijo particionado sostiene al menos 3 500 escrituras y 5 500
+      lecturas por segundo, y no hay límite en el número de prefijos. Con diez
+      prefijos tienes 55 000 lecturas por segundo. Así que cómo nombras las
+      claves no es cosmética: es tu plan de capacidad.
+  - termino: Se reemplaza, no se modifica
+    explicacion: >-
+      No hay append ni escritura parcial. Cambiar un byte de un objeto de 1 GB
+      significa subir 1 GB otra vez. Si tu caso pide modificar poco y a menudo,
+      S3 no es el almacén — o necesita otro formato de datos delante.
+limites:
+  - concepto: Tamaño máximo de un objeto
+    valor: 48,83 TB
+    tipo: hard
+    nota: >-
+      Sale de la multiplicación de los otros dos límites: 10 000 partes por
+      5 GB. La cifra de 5 TB que circula por ahí está anticuada.
+  - concepto: Tamaño de una parte en multipart
+    valor: mínimo 5 MB · máximo 5 GB
+    tipo: hard
+    nota: La última parte puede ser más pequeña que el mínimo.
+  - concepto: Partes por subida multipart
+    valor: 10 000
+    tipo: hard
+  - concepto: Subida desde la consola
+    valor: 160 GB
+    tipo: hard
+  - concepto: Escrituras por prefijo particionado
+    valor: 3 500 por segundo
+    tipo: hard
+    nota: PUT, COPY, POST y DELETE. Se multiplica añadiendo prefijos, no pidiendo aumento.
+  - concepto: Lecturas por prefijo particionado
+    valor: 5 500 por segundo
+    tipo: hard
+    nota: GET y HEAD. Sin límite en el número de prefijos por bucket.
+  - concepto: Buckets de propósito general
+    valor: 10 000 por cuenta
+    tipo: soft
+  - concepto: Buckets de directorio
+    valor: 100 por cuenta
+    tipo: soft
+  - concepto: Política de bucket
+    valor: 20 KB
+    tipo: hard
+    nota: Se agota antes de lo que parece si concedes acceso a muchos principales.
+  - concepto: Notificaciones de evento
+    valor: 100 por bucket
+    tipo: hard
+  - concepto: Reglas de ciclo de vida
+    valor: 1 000
+    tipo: hard
+  - concepto: Reglas de replicación
+    valor: 1 000
+    tipo: hard
+  - concepto: Etiquetas
+    valor: 50 por bucket · 10 por objeto
+    tipo: hard
+  - concepto: Access Points
+    valor: 10 000 por región
+    tipo: soft
+  - concepto: Latencia típica
+    valor: 100–200 ms
+    tipo: hard
+    nota: Para objetos pequeños, o primer byte en objetos grandes. No es una base de datos.
+---
+
+## Modelo mental
+
+S3 es **una tabla hash gigante de cadena a bytes**. La clave es el nombre
+completo del objeto, el valor son sus bytes, y no hay nada más.
+
+Todo lo que sorprende de S3 sale de tomarse esa frase en serio:
+
+**No hay carpetas.** `facturas/2026/09/4711.pdf` no está "dentro" de nada: es un
+nombre que contiene barras. La consola las dibuja como directorios porque es
+cómodo, pero no existen. Por eso no puedes renombrar una carpeta —hay que
+copiar cada objeto y borrar el original— y por eso listar "una carpeta" con
+muchos objetos es caro.
+
+**No se modifica, se reemplaza.** No hay append, no hay escribir en el byte
+1 000. Cambiar una línea de un CSV de 2 GB es subir 2 GB otra vez. Si tu caso
+de uso es escribir poco y a menudo sobre el mismo objeto, el problema no es que
+S3 vaya lento: es que estás usando la herramienta equivocada.
+
+**La consistencia ya no es un problema.** S3 da lectura tras escritura fuerte
+desde 2020. Los artículos que hablan de "consistencia eventual en S3" y de
+esperar unos segundos antes de leer están desactualizados.
+
+### El nombre de la clave es tu plan de capacidad
+
+Esta es la parte que separa a quien ha operado S3 a escala de quien no.
+
+Cada **prefijo particionado** sostiene al menos **3 500 escrituras y 5 500
+lecturas por segundo**, y —esto es lo bueno— **no hay límite en el número de
+prefijos** de un bucket. Diez prefijos son 55 000 lecturas por segundo.
+
+Así que el rendimiento de S3 no se pide con un ticket: **se diseña nombrando**.
+Si todas tus claves empiezan por `uploads/2026-09-06/`, todo el tráfico del día
+cae en el mismo prefijo. Si empiezan por un identificador con buena
+distribución, se reparte solo.
+
+Y un detalle operativo importante: **el escalado es gradual, no instantáneo**.
+Cuando subes el ritmo de golpe, S3 responde con **503 (Slow Down)** mientras
+reparticiona. No es un error de tu código; es S3 pidiendo tiempo. Reintentar
+con backoff es la respuesta correcta.
+
+## Cómo te factura
+
+Cuatro conceptos, y el que sorprende no es el almacenamiento:
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| Almacenamiento estándar | ~0,023 USD / GB-mes |
+| Peticiones PUT, COPY, POST, LIST | ~0,005 USD / 1 000 |
+| Peticiones GET y similares | ~0,0004 USD / 1 000 |
+| **Transferencia de salida a internet** | **el que se lleva la factura** |
+
+Guardar es barato. **Sacar es caro.** Un terabyte almacenado cuesta unos 23
+dólares al mes; ese mismo terabyte servido a internet cuesta varias veces más.
+Por eso poner CloudFront delante de un bucket con tráfico no es solo una
+optimización de latencia: es una decisión de coste.
+
+Dos trampas de facturación concretas:
+
+**`LIST` cuesta como una escritura**, no como una lectura — un orden de magnitud
+más. Un proceso que lista un bucket grande en bucle es una factura sorpresa
+clásica.
+
+**Las clases baratas tienen letra pequeña.** Glacier y compañía cobran por
+recuperar y tienen mínimos de permanencia; mover a Glacier objetos que vas a
+leer el mes que viene sale más caro que dejarlos donde estaban.
+
+## Cuándo NO usarlo
+
+- **Necesitas modificar partes de un archivo.** No hay append ni escritura
+  parcial. Eso es EFS, o una base de datos.
+- **Necesitas latencia de milisegundos.** S3 da del orden de **100–200 ms**
+  para objetos pequeños. Es almacenamiento, no una caché.
+- **Necesitas consultar por contenido.** Buscar "todos los pedidos de septiembre
+  con importe mayor que 500" no se hace listando un bucket. Los metadatos van a
+  una base de datos y S3 guarda los bytes.
+- **Los objetos son diminutos y numerosísimos.** Millones de objetos de 200
+  bytes pagan mucho más en peticiones que en almacenamiento. Agrúpalos.
+- **Necesitas semántica de sistema de ficheros** —bloqueos, renombrar
+  directorios, permisos POSIX—. Eso es EFS o FSx.
+
+## Errores comunes
+
+**Poner el bucket público para servir archivos.** La respuesta casi siempre es
+CloudFront con OAC, o una URL prefirmada. Un bucket público es una fuga de datos
+esperando a que alguien suba el archivo equivocado.
+
+**Hacer que el archivo pase por tu Lambda.** Es el error más caro en serverless:
+API Gateway admite 10 MB y una Lambda síncrona 6 MB, así que el techo real son
+6 MB, y encima pagas la duración de la función mientras mueve bytes. Para eso
+están las URL prefirmadas.
+
+**Diseñar claves con prefijo temporal.** `2026-09-06/...` concentra todo el
+tráfico del día en un prefijo. Funciona hasta que deja de funcionar, y entonces
+la solución es renombrar millones de objetos.
+
+**Tratar los 503 como un bug.** Durante el reparticionado S3 devuelve *Slow
+Down*. Reintenta con backoff y jitter.
+
+**Listar para comprobar si algo existe.** `HeadObject` sobre la clave concreta
+es una petición barata; `ListObjectsV2` sobre un prefijo grande, no.
+
+**Olvidar el ciclo de vida.** Sin reglas, las subidas multipart abortadas se
+quedan como partes huérfanas que ocupan y se facturan **sin aparecer en la lista
+de objetos**. Es la línea de la factura que nadie sabe explicar.
+
+## Fuentes
+
+Rendimiento por prefijo, ausencia de límite en el número de prefijos, escalado
+gradual y respuestas 503 Slow Down:
+[Best practices design patterns: optimizing Amazon S3 performance](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html).
+Tamaño máximo de objeto y de parte, número de partes, buckets por cuenta,
+política de bucket, notificaciones, reglas de ciclo de vida y replicación,
+etiquetas y access points:
+[Amazon S3 endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/s3.html).
+Los importes proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente: trátalos como orden de magnitud.
