@@ -3,6 +3,8 @@ import { getEntries, type CollectionEntry } from 'astro:content';
 import { Icon } from '@aws-icons/astro';
 import Base from './Base.astro';
 import CopiarPagina from '../components/CopiarPagina.astro';
+import EscucharPagina from '../components/EscucharPagina.astro';
+import { hayAudio } from '../lib/audio';
 
 interface Props {
   entrada: CollectionEntry<'patrones'>;
@@ -35,9 +37,9 @@ const ESCALONES = ['Directo', 'Intermedio', 'Delicado'];
   <main class="envoltura">
     <div class="cabecera">
       <p class="cabecera__familia">{d.familia}</p>
-      <h1 class="cabecera__titulo">{d.titulo}</h1>
+      <h1 class="cabecera__titulo" data-leible>{d.titulo}</h1>
       {d.alias && <p class="cabecera__alias">También llamado <em>{d.alias}</em></p>}
-      {d.intencion && <p class="cabecera__intencion">{d.intencion}</p>}
+      {d.intencion && <p class="cabecera__intencion" data-leible>{d.intencion}</p>}
 
       <div class="cabecera__meta">
         {servicios.length > 0 && (
@@ -67,12 +69,13 @@ const ESCALONES = ['Directo', 'Intermedio', 'Delicado'];
               Verificado el <time datetime={d.verificado_en}>{d.verificado_en}</time>
             </span>
           )}
+          {hayAudio('patrones', entrada.id) && <EscucharPagina coleccion="patrones" id={entrada.id} />}
           <CopiarPagina href={`/patrones/${entrada.id}.md`} />
         </div>
       </div>
     </div>
 
-    <article class="prosa cuerpo">
+    <article class="prosa cuerpo" data-leible>
       <slot />
     </article>
 

@@ -3,6 +3,8 @@ import type { CollectionEntry } from 'astro:content';
 import { Icon } from '@aws-icons/astro';
 import Base from './Base.astro';
 import CopiarPagina from '../components/CopiarPagina.astro';
+import EscucharPagina from '../components/EscucharPagina.astro';
+import { hayAudio } from '../lib/audio';
 import { patronesQueUsan } from '../lib/coherencia';
 
 interface Props {
@@ -27,12 +29,12 @@ const apariciones = await patronesQueUsan(entrada.id);
       <div class="cabecera__marca">
         <Icon name={d.icono as never} width="56" height="56" />
         <div>
-          <h1 class="cabecera__titulo">{d.titulo}</h1>
+          <h1 class="cabecera__titulo" data-leible>{d.titulo}</h1>
           {d.nombre_completo && <p class="cabecera__completo">{d.nombre_completo}</p>}
         </div>
       </div>
 
-      {d.en_una_frase && <p class="cabecera__frase">{d.en_una_frase}</p>}
+      {d.en_una_frase && <p class="cabecera__frase" data-leible>{d.en_una_frase}</p>}
 
       <div class="cabecera__sellos">
         {d.verificado_en && (
@@ -40,12 +42,13 @@ const apariciones = await patronesQueUsan(entrada.id);
             Verificado el <time datetime={d.verificado_en}>{d.verificado_en}</time>
           </span>
         )}
-        <CopiarPagina href={`/servicios/${entrada.id}.md`} />
+        {hayAudio('servicios', entrada.id) && <EscucharPagina coleccion="servicios" id={entrada.id} />}
+          <CopiarPagina href={`/servicios/${entrada.id}.md`} />
       </div>
     </div>
 
     {d.los_3_conceptos && (
-      <section class="conceptos">
+      <section class="conceptos" data-leible>
         <h2 class="seccion__titulo">Los tres conceptos</h2>
         <p class="seccion__nota">Si no entiendes estos tres, nada de lo demás encaja.</p>
         <ol class="conceptos__lista">
@@ -91,7 +94,7 @@ const apariciones = await patronesQueUsan(entrada.id);
       </section>
     )}
 
-    <article class="prosa cuerpo">
+    <article class="prosa cuerpo" data-leible>
       <slot />
     </article>
 

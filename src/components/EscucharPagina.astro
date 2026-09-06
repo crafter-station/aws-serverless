@@ -1,0 +1,331 @@
+---
+/*
+  "Escuchar": reproduce la narración de la ficha y va resaltando la palabra
+  que suena.
+
+  El audio y los tiempos se generan a mano con `scripts/generar-audio.mjs` y
+  viven en `public/audio/`. Aquí no se sintetiza nada: la página solo descarga
+  dos ficheros y los sincroniza.
+
+  Nada se carga hasta que alguien pulsa. Traer tres megas de mp3 a todo el que
+  abre una ficha para que lo use uno de cada cien es justo el tipo de peaje que
+  este sitio no quiere cobrar.
+*/
+interface Props {
+  /** Carpeta de la colección dentro de /audio/. */
+  coleccion: string;
+  id: string;
+}
+const { coleccion, id } = Astro.props;
+const base = `/audio/${coleccion}/${id}`;
+---
+
+<button class="accion accion--escuchar" type="button" data-audio={`${base}.mp3`} data-tiempos={`${base}.json`}>
+  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <path d="M3.5 6.5v3M6.5 4v8M9.5 5.5v5M12.5 6.5v3" />
+  </svg>
+  <span class="accion__texto">Escuchar</span>
+</button>
+
+<div class="reproductor" hidden>
+  <div class="reproductor__caja">
+    <button class="rep__jugar" type="button" aria-label="Reproducir o pausar">
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 2.5l9 5.5-9 5.5z" /></svg>
+    </button>
+
+    <span class="rep__reloj"><span class="rep__ahora">0:00</span> / <span class="rep__total">—</span></span>
+
+    <input class="rep__barra" type="range" min="0" max="1000" value="0" aria-label="Posición" />
+
+    <button class="rep__velocidad" type="button" aria-label="Velocidad">1×</button>
+
+    <button class="rep__seguir rep__seguir--activo" type="button" aria-pressed="true">
+      Seguir
+    </button>
+
+    <button class="rep__cerrar" type="button" aria-label="Cerrar">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+    </button>
+  </div>
+</div>
+
+<script>
+  import { extraer, raices } from '../lib/lectura.js';
+
+  const boton = document.querySelector<HTMLButtonElement>('.accion--escuchar');
+  const panel = document.querySelector<HTMLElement>('.reproductor');
+  if (boton && panel) preparar(boton, panel);
+
+  function preparar(boton: HTMLButtonElement, panel: HTMLElement) {
+    const rotulo = boton.querySelector('.accion__texto')!;
+    const jugar = panel.querySelector<HTMLButtonElement>('.rep__jugar')!;
+    const barra = panel.querySelector<HTMLInputElement>('.rep__barra')!;
+    const ahora = panel.querySelector('.rep__ahora')!;
+    const total = panel.querySelector('.rep__total')!;
+    const velocidad = panel.querySelector<HTMLButtonElement>('.rep__velocidad')!;
+    const seguirBtn = panel.querySelector<HTMLButtonElement>('.rep__seguir')!;
+    const cerrar = panel.querySelector<HTMLButtonElement>('.rep__cerrar')!;
+
+    let audio: HTMLAudioElement | null = null;
+    let tiempos: number[] = [];
+    /** Para cada índice de palabra, los <span> que la componen. Una palabra
+        partida por un <strong> tiene dos. */
+    let trozosDe: HTMLElement[][] = [];
+    let activa = -1;
+    let seguir = true;
+    const VELOCIDADES = [1, 1.25, 1.5, 0.85];
+    let iVelocidad = 0;
+
+    const reloj = (s: number) =>
+      `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+    boton.addEventListener('click', async () => {
+      if (audio) {
+        audio.paused ? audio.play() : audio.pause();
+        return;
+      }
+      rotulo.textContent = 'Cargando…';
+      try {
+        await arrancar();
+      } catch (e) {
+        rotulo.textContent = 'No disponible';
+        console.error(e);
+      }
+    });
+
+    async function arrancar() {
+      const datos = await fetch(boton.dataset.tiempos!).then((r) => r.json());
+
+      /*
+        El resaltado solo se enciende si lo que hay en la página es exactamente
+        lo que se narró. Si el HTML cambió y el audio no, es preferible sonar
+        sin resaltar que resaltar la palabra equivocada.
+      */
+      const { palabras, trozos } = extraer(raices(document));
+      const cuadra =
+        palabras.length === datos.palabras.length &&
+        palabras.every((p, i) => p === datos.palabras[i]);
+
+      if (cuadra) {
+        envolver(trozos, palabras.length);
+        tiempos = datos.t;
+      } else {
+        console.warn('El texto de la página no coincide con el audio: sin resaltado.');
+      }
+
+      audio = new Audio(boton.dataset.audio!);
+      audio.preload = 'auto';
+      audio.playbackRate = VELOCIDADES[iVelocidad];
+
+      audio.addEventListener('loadedmetadata', () => {
+        total.textContent = reloj(audio!.duration);
+      });
+      audio.addEventListener('timeupdate', latido);
+      audio.addEventListener('play', () => pintarEstado(true));
+      audio.addEventListener('pause', () => pintarEstado(false));
+      audio.addEventListener('ended', () => {
+        pintarEstado(false);
+        marcar(-1);
+      });
+
+      panel.hidden = false;
+      document.body.classList.add('con-reproductor');
+
+
+      await audio.play();
+    }
+
+    function envolver(trozos: { nodo: Text; desde: number; hasta: number; palabra: number }[], n: number) {
+      trozosDe = Array.from({ length: n }, () => []);
+
+      const porNodo = new Map<Text, typeof trozos>();
+      for (const t of trozos) {
+        if (!porNodo.has(t.nodo)) porNodo.set(t.nodo, []);
+        porNodo.get(t.nodo)!.push(t);
+      }
+
+      for (const [nodo, lista] of porNodo) {
+        const texto = nodo.data;
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        for (const t of lista) {
+          if (t.desde > pos) frag.append(texto.slice(pos, t.desde));
+          const s = document.createElement('span');
+          s.className = 'pal';
+          s.dataset.i = String(t.palabra);
+          s.textContent = texto.slice(t.desde, t.hasta);
+          frag.append(s);
+          trozosDe[t.palabra].push(s);
+          pos = t.hasta;
+        }
+        if (pos < texto.length) frag.append(texto.slice(pos));
+        nodo.replaceWith(frag);
+      }
+
+      // Pinchar una palabra salta a ella. Es la forma natural de navegar audio largo.
+      document.addEventListener('click', (e) => {
+        const s = (e.target as HTMLElement)?.closest?.('.pal') as HTMLElement | null;
+        if (!s || !audio || !tiempos.length) return;
+        audio.currentTime = tiempos[Number(s.dataset.i)] ?? 0;
+        if (audio.paused) audio.play();
+      });
+    }
+
+    /** Última palabra cuyo instante ya pasó. Búsqueda binaria: son miles. */
+    function indiceEn(t: number) {
+      let lo = 0;
+      let hi = tiempos.length - 1;
+      let r = -1;
+      while (lo <= hi) {
+        const m = (lo + hi) >> 1;
+        if (tiempos[m] <= t) { r = m; lo = m + 1; } else hi = m - 1;
+      }
+      return r;
+    }
+
+    function latido() {
+      if (!audio) return;
+      const t = audio.currentTime;
+      ahora.textContent = reloj(t);
+      if (audio.duration) barra.value = String((t / audio.duration) * 1000);
+      if (tiempos.length) marcar(indiceEn(t));
+    }
+
+    function marcar(i: number) {
+      if (i === activa) return;
+      for (const s of trozosDe[activa] ?? []) s.classList.remove('pal--activa');
+      activa = i;
+      const spans = trozosDe[i] ?? [];
+      for (const s of spans) s.classList.add('pal--activa');
+      if (seguir && spans[0]) aLaVista(spans[0]);
+    }
+
+    function aLaVista(el: HTMLElement) {
+      const r = el.getBoundingClientRect();
+      const margen = 120;
+      if (r.top < margen || r.bottom > window.innerHeight - margen) {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    }
+
+    function pintarEstado(sonando: boolean) {
+      jugar.classList.toggle('rep__jugar--pausa', sonando);
+      rotulo.textContent = sonando ? 'Pausar' : 'Escuchar';
+      boton.classList.toggle('accion--hecho', sonando);
+    }
+
+    jugar.addEventListener('click', () => (audio?.paused ? audio.play() : audio?.pause()));
+
+    barra.addEventListener('input', () => {
+      if (audio?.duration) audio.currentTime = (Number(barra.value) / 1000) * audio.duration;
+    });
+
+    velocidad.addEventListener('click', () => {
+      iVelocidad = (iVelocidad + 1) % VELOCIDADES.length;
+      const v = VELOCIDADES[iVelocidad];
+      velocidad.textContent = `${v}×`;
+      if (audio) audio.playbackRate = v;
+    });
+
+    seguirBtn.addEventListener('click', () => ponerSeguir(!seguir));
+
+    function ponerSeguir(v: boolean) {
+      seguir = v;
+      seguirBtn.classList.toggle('rep__seguir--activo', v);
+      seguirBtn.setAttribute('aria-pressed', String(v));
+    }
+
+    // Si el lector se pone a leer por su cuenta, el audio deja de arrastrarle.
+    for (const ev of ['wheel', 'touchmove'] as const) {
+      window.addEventListener(ev, () => seguir && ponerSeguir(false), { passive: true });
+    }
+
+    cerrar.addEventListener('click', () => {
+      audio?.pause();
+      panel.hidden = true;
+      document.body.classList.remove('con-reproductor');
+      marcar(-1);
+    });
+  }
+</script>
+
+<style is:global>
+  /* Las palabras las envuelve el script sobre el contenido ya renderizado, así
+     que su estilo no puede ir en el ámbito del componente. */
+  .pal--activa {
+    background: #ffe08a;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px #ffe08a;
+  }
+  body.con-reproductor { padding-bottom: 4.5rem; }
+</style>
+
+<style>
+  .accion {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .3rem .7rem;
+    font-family: var(--sans); font-size: .75rem; font-weight: 600;
+    letter-spacing: .02em;
+    color: var(--tinta-tenue); background: var(--papel-alto);
+    border: 1px solid var(--linea); border-radius: 999px;
+    cursor: pointer; transition: color .12s, border-color .12s;
+  }
+  .accion:hover { color: var(--acento); border-color: var(--acento); }
+  .accion svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+  .accion--hecho, .accion--hecho:hover { color: var(--bien); border-color: var(--bien); }
+
+  .reproductor {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    padding: .6rem clamp(.75rem, 4vw, 2rem) calc(.6rem + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--papel-alto) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid var(--linea);
+  }
+  .reproductor__caja {
+    display: flex; align-items: center; gap: .75rem;
+    max-width: 62rem; margin: 0 auto;
+    font-family: var(--sans); font-size: .75rem; color: var(--tinta-tenue);
+  }
+
+  .rep__jugar {
+    flex: none; display: grid; place-items: center;
+    width: 2rem; height: 2rem; padding: 0;
+    background: var(--tinta); border: 0; border-radius: 999px;
+    color: var(--papel-alto); cursor: pointer;
+  }
+  .rep__jugar svg { fill: currentColor; margin-left: 1px; }
+  .rep__jugar--pausa svg { display: none; }
+  .rep__jugar--pausa::after {
+    content: ''; width: 9px; height: 11px;
+    border-left: 3px solid currentColor; border-right: 3px solid currentColor;
+  }
+
+  .rep__reloj { flex: none; font-variant-numeric: tabular-nums; }
+
+  .rep__barra {
+    flex: 1 1 auto; min-width: 4rem; height: 3px; padding: 0;
+    appearance: none; background: var(--linea); border-radius: 999px; cursor: pointer;
+  }
+  .rep__barra::-webkit-slider-thumb {
+    appearance: none; width: 12px; height: 12px; border-radius: 999px;
+    background: var(--acento); border: 0; cursor: pointer;
+  }
+  .rep__barra::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 999px; background: var(--acento); border: 0;
+  }
+
+  .rep__velocidad, .rep__seguir, .rep__cerrar {
+    flex: none; padding: .25rem .55rem;
+    font-family: var(--sans); font-size: .7rem; font-weight: 600;
+    color: var(--tinta-tenue); background: transparent;
+    border: 1px solid var(--linea); border-radius: 999px; cursor: pointer;
+  }
+  .rep__velocidad { font-variant-numeric: tabular-nums; }
+  .rep__seguir--activo { color: var(--acento); border-color: var(--acento); }
+  .rep__cerrar { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; padding: 0; }
+  .rep__cerrar svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
+
+  @media (max-width: 560px) {
+    .rep__seguir, .rep__reloj { display: none; }
+  }
+</style>
