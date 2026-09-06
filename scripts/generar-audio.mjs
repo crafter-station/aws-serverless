@@ -258,10 +258,16 @@ async function generar(coleccion, slug) {
     const dur = await duracion(ruta);
     for (let k = trozo.desde; k < trozo.hasta; k++) {
       const t = alineados ? alineados[k - trozo.desde] : ((k - trozo.desde) / (trozo.hasta - trozo.desde)) * dur;
-      tiempos[k] = +(desplazamiento + t).toFixed(2);
+      /*
+        Máximo acumulado. Whisper devuelve de vez en cuando la última palabra
+        de una frase con un inicio unas centésimas anterior al de la palabra
+        que la precede, y el reproductor busca en esta lista con búsqueda
+        binaria: un solo retroceso la invalida entera.
+      */
+      tiempos[k] = Math.max(+(desplazamiento + t).toFixed(2), k > 0 ? tiempos[k - 1] : 0);
     }
+    // Sin traza por trozo: con varias fichas a la vez, se pisan la línea.
     desplazamiento += dur;
-    process.stdout.write(`    trozo ${n + 1}/${trozos.length} · ${desplazamiento.toFixed(0)} s\r`);
   }
 
   // Un solo mp3, mono y a poco bitrate: es voz, y va a un repositorio.
@@ -301,13 +307,37 @@ for (const coleccion of ['patrones', 'servicios']) {
   }
 }
 
-console.log(`${fichas.length} fichas.`);
+/*
+  Varias fichas a la vez. Cada una es una cadena larga de esperas —sintetizar,
+  transcribir, medir— en la que la máquina no hace nada, así que en serie el
+  lote entero tarda casi una hora por no pedir dos cosas al mismo tiempo.
+
+  El tope existe por los límites de ritmo de la API; si aparecen 429, el
+  reintento con backoff los absorbe, pero es mejor no provocarlos.
+*/
+const A_LA_VEZ = Number(process.env.AUDIO_EN_PARALELO ?? 5);
+
+console.log(`${fichas.length} fichas, ${A_LA_VEZ} a la vez.`);
 let caracteres = 0;
 let segundos = 0;
-for (const { coleccion, slug } of fichas) {
-  const r = await generar(coleccion, slug);
-  if (r) { caracteres += r.caracteres; segundos += r.segundos; }
-}
+let hechas = 0;
+
+const cola = fichas.slice();
+await Promise.all(
+  Array.from({ length: Math.min(A_LA_VEZ, cola.length) }, async () => {
+    for (;;) {
+      const ficha = cola.shift();
+      if (!ficha) return;
+      try {
+        const r = await generar(ficha.coleccion, ficha.slug);
+        if (r) { caracteres += r.caracteres; segundos += r.segundos; }
+      } catch (e) {
+        console.error(`  ${ficha.slug}: FALLÓ · ${e.message}`);
+      }
+      console.log(`  [${++hechas}/${fichas.length}]`);
+    }
+  }),
+);
 await rm(TMP, { recursive: true, force: true });
 console.log(
   `\nTotal: ${caracteres} caracteres · ${(segundos / 60).toFixed(1)} minutos de audio.`,
