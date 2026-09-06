@@ -8,6 +8,12 @@ intencion: Apartar los mensajes que fallan una y otra vez para que dejen de bloq
 verificado_en: "2026-09-06"
 servicios: [sqs, sns, lambda]
 relacionados:
+  - patron: retry-con-backoff-y-jitter
+    tipo: se combina con
+    porque: >-
+      El backoff marca el ritmo al que un mensaje agota sus intentos. Esperas
+      largas con retención de cola corta hacen que caduque antes de llegar a
+      la DLQ.
   - patron: batching-y-fallo-parcial
     tipo: se combina con
     porque: >-

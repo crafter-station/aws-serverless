@@ -8,6 +8,12 @@ intencion: Repartir el bote de concurrencia de la cuenta para que ninguna funciÃ
 verificado_en: "2026-09-06"
 servicios: [lambda, sqs, dynamodb]
 relacionados:
+  - patron: retry-con-backoff-y-jitter
+    tipo: se combina con
+    porque: >-
+      Reintentar multiplica peticiones. Contra un destino con tope de
+      concurrencia, los reintentos compiten por los mismos huecos y alargan la
+      cola en vez de vaciarla.
   - patron: cold-start
     tipo: se combina con
     porque: >-

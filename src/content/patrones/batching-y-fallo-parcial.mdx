@@ -10,6 +10,11 @@ intencion: >-
 verificado_en: "2026-09-06"
 servicios: [lambda, sqs, kinesis, dynamodb]
 relacionados:
+  - patron: retry-con-backoff-y-jitter
+    tipo: se combina con
+    porque: >-
+      Sin fallo parcial, el backoff castiga al lote entero: los mensajes sanos
+      esperan la escalada exponencial que provocó el que falla.
   - patron: idempotencia-en-consumidores
     tipo: requiere
     porque: >-

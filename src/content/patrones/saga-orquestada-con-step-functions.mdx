@@ -8,6 +8,12 @@ intencion: Coordinar una operación que toca varios servicios sin transacción d
 verificado_en: "2026-09-06"
 servicios: [step-functions, lambda, dynamodb, sqs]
 relacionados:
+  - patron: retry-con-backoff-y-jitter
+    tipo: se combina con
+    porque: >-
+      El bloque Retry de cada estado es donde se configura el backoff — y
+      donde hay que acordarse de poner JitterStrategy y MaxDelaySeconds, que
+      no vienen puestos.
   - patron: idempotencia-en-consumidores
     tipo: se combina con
     porque: >-

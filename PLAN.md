@@ -124,8 +124,8 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
 - [x] 8. Servicios de las familias que faltaban: Kinesis, CloudWatch, CloudFront,
       Cognito y Route 53. **13 servicios.**
 - [ ] 9. Seguir ensanchando el catálogo de patrones hacia los ~34 propuestos.
-      Los 14 primeros están cerrados y el grafo es mutuo; cada patrón nuevo
-      añade sus recíprocos.
+      **16 escritos**, el grafo mutuo y cerrado; cada patrón nuevo añade sus
+      recíprocos en las fichas que toca.
 - [x] 6. Umbral de mostrar alcanzado: 4 servicios + 3 patrones
 
 ### Lo que el sistema resultó ser

@@ -1,0 +1,372 @@
+---
+titulo: Retry con backoff y jitter
+alias: Exponential backoff with jitter
+familia: Fiabilidad
+estado: listo
+dificultad: 2
+intencion: >-
+  Volver a intentar lo que falló de forma transitoria, esperando cada vez más y
+  con un componente aleatorio, para no convertir un incidente pequeño en una
+  avalancha sincronizada contra un servicio que se estaba recuperando.
+verificado_en: "2026-09-06"
+servicios: [lambda, step-functions, dynamodb, sqs, s3]
+relacionados:
+  - patron: idempotencia-en-consumidores
+    tipo: requiere
+    porque: >-
+      Un reintento es una duplicación deliberada. La petición que dio timeout
+      puede haberse ejecutado entera antes de que se cortara la respuesta, así
+      que reintentar sin idempotencia es cobrar dos veces a propósito.
+  - patron: dlq-y-redrive
+    tipo: se combina con
+    porque: >-
+      El backoff decide cuánto tarda un mensaje venenoso en agotar sus intentos,
+      y por tanto cuánto tarda en llegar a la DLQ. Con esperas largas y
+      retención corta, puede caducar antes de que lo aparten.
+  - patron: saga-orquestada-con-step-functions
+    tipo: se combina con
+    porque: >-
+      El bloque Retry de una máquina de estados es donde este patrón se
+      configura de verdad, y donde su valor por defecto de jitter (ninguno) es
+      distinto al del SDK.
+  - patron: batching-y-fallo-parcial
+    tipo: se combina con
+    porque: >-
+      Sin fallo parcial, el backoff se aplica al lote entero: nueve mensajes
+      sanos esperan la escalada exponencial que provocó el décimo.
+  - patron: concurrencia-reservada
+    tipo: se combina con
+    porque: >-
+      Reintentar es multiplicar peticiones. Si el destino está estrangulado por
+      concurrencia, los reintentos compiten por los mismos huecos y alargan la
+      cola en vez de vaciarla.
+---
+
+import ReintentosJitter from '../../components/diagrama/ReintentosJitter.astro';
+import ReintentosCapas from '../../components/diagrama/ReintentosCapas.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Un servicio devuelve `503`. No pasa nada: es transitorio, se reintenta y sale.
+Ese razonamiento es correcto para **un** cliente. El problema aparece cuando el
+error no era tuyo sino del servicio, y por tanto **lo recibieron todos a la vez**.
+
+Mil clientes reciben el `503` en el mismo instante. Mil clientes esperan lo
+mismo —50 ms, o un segundo, o lo que diga tu constante— y **vuelven a llamar en
+el mismo instante**. El servicio, que estaba levantándose, recibe otro pico
+idéntico al que lo tiró. Vuelve a caer. Y ahora los mil vuelven a estar
+sincronizados, esta vez para siempre.
+
+Eso es el **thundering herd**, y tiene una propiedad desagradable: **el sistema
+se sincroniza solo**. No hace falta que nadie lo coordine; basta con que todos
+usen la misma espera. Un incidente de treinta segundos se convierte en uno de
+media hora porque el propio tráfico de reintentos impide la recuperación.
+
+Y hay una segunda mitad, más silenciosa. Reintentar sin límite mientras el
+servicio está caído **no es gratis**: cada reintento ocupa un hilo, una
+conexión y un timeout de tu lado. Cuando la tasa de fallo es alta, tu
+aplicación pasa de "falla rápido" a "se queda colgada esperando llamadas que ya
+sabemos que no van a funcionar".
+
+<Caja tipo="clave">
+Reintentar es la respuesta correcta a un error transitorio. Reintentar **igual
+que todos los demás y a la misma hora** es lo que convierte un error transitorio
+en una caída.
+</Caja>
+
+## La solución
+
+Dos ingredientes, y el segundo es el que casi nadie pone.
+
+**Backoff exponencial**: cada intento espera aproximadamente el doble que el
+anterior. Un fallo puntual se resuelve en milisegundos; uno que persiste merece
+que dejes de insistir tan seguido.
+
+**Jitter**: multiplicar esa espera por un número aleatorio. Es lo que rompe la
+sincronización. La variante que usan los SDK de AWS es **full jitter** —
+aleatorio entre cero y el techo, no un ±10% alrededor de él:
+
+```
+delay = random(0, 1) × min(20 000 ms, base_delay × 2^intento)
+```
+
+<ReintentosJitter />
+
+Fíjate en lo que el jitter **no** hace: no reduce el número de reintentos ni el
+tiempo medio de espera —el promedio de `random(0,1)` es la mitad del techo, así
+que de hecho la reduce—. Lo que hace es **repartir en el tiempo** lo que antes
+llegaba de golpe. El servicio recibe un goteo constante en vez de picos, y un
+goteo constante sí lo puede absorber mientras se recupera.
+
+El tercer ingrediente, que solo trae el SDK, es saber **cuándo dejar de
+reintentar del todo**: la *retry quota*, un cubo de fichas que se vacía cuando
+demasiadas peticiones fallan y hace que tu cliente empiece a devolver el error
+inmediatamente en vez de esperar. Falla rápido tú, y de paso dejas de empujar
+al servicio caído.
+
+## Cuándo usarlo
+
+Siempre que la llamada sea **de red y a un tercero** — y en serverless eso es
+casi cada línea. La pregunta útil no es *si* reintentar sino *quién*:
+
+- **El SDK ya lo hace por ti.** Cualquier llamada a un servicio de AWS a través
+  de un SDK oficial ya reintenta con backoff y full jitter. Escribir tu propio
+  bucle encima es el error más común de este patrón.
+- **Tú lo configuras** cuando el que reintenta es un orquestador — el bloque
+  `Retry` de Step Functions — o cuando llamas a una API que no es de AWS.
+- **No reintentes** errores no transitorios. Un `ValidationException`, un
+  `AccessDenied` o un `ResourceNotFound` van a fallar exactamente igual la
+  segunda vez; reintentarlos solo añade latencia al error.
+
+Y una condición previa que no es negociable: **la operación tiene que ser
+idempotente**. Un timeout no significa que no se ejecutara — significa que no te
+enteraste. Reintentar un cobro no idempotente es cobrar dos veces.
+
+## Cómo implementarlo
+
+### En el SDK: elegir el modo y no tocar nada más
+
+El SDK tiene tres modos —`standard`, `adaptive` y `legacy`— y el que quieres es
+el que ya viene puesto.
+
+| | Standard | Adaptive | Legacy |
+| --- | --- | --- | --- |
+| Retry quota | sí | sí | según el SDK |
+| Puede retrasar la petición **inicial** | no | **sí** | no |
+| Backoff distinto por tipo de error | sí | sí | según el SDK |
+| Igual en todos los lenguajes | sí | sí | **no** |
+
+`standard` es el default y la respuesta correcta salvo un caso concreto:
+`adaptive` añade un limitador de ritmo en el cliente que se frena solo cuando
+detecta throttling, y sirve si **un solo cliente machaca un solo recurso** —una
+tabla de DynamoDB, un proceso batch—. Su contrapartida es grande: el limitador
+es **por instancia de cliente**, así que el throttling de un recurso frena
+también las llamadas a los que estaban bien. Con un cliente multiinquilino,
+`adaptive` es peor que no hacer nada.
+
+Los dos únicos ajustes que se tocan de verdad:
+
+| Ajuste | Variable de entorno | Clave en `~/.aws/config` | Default |
+| --- | --- | --- | --- |
+| Modo | `AWS_RETRY_MODE` | `retry_mode` | `standard` |
+| Intentos totales | `AWS_MAX_ATTEMPTS` | `max_attempts` | **3** |
+
+`max_attempts: 3` significa **una petición inicial y hasta dos reintentos**, no
+tres reintentos. Y `1` desactiva los reintentos por completo.
+
+### Los números que rigen la espera
+
+| | Error transitorio | Throttling |
+| --- | --- | --- |
+| Ejemplos | `RequestTimeout`, `InternalError`, 500/502/503/504 | `ThrottlingException`, `ProvisionedThroughputExceededException`, `SlowDown` |
+| Base | **50 ms** | **1 000 ms** |
+| Techo | 20 s, alcanzado en el 10.º reintento | 20 s, alcanzado en el 6.º |
+
+La distinción importa porque significa algo distinto: un `503` suele resolverse
+en milisegundos, mientras que un throttling es el servicio diciéndote
+explícitamente que le des tiempo. Un `5XX` **con código de error de throttling**
+cuenta como throttling, no como transitorio — el SDK mira primero el código y
+solo después el estado HTTP.
+
+### La retry quota
+
+Es la parte que nadie conoce y la que explica por qué a veces "no reintentó":
+
+| Parámetro | Valor |
+| --- | --- |
+| Capacidad del cubo | **500 fichas** |
+| Coste de un reintento por error transitorio | **14** |
+| Coste de un reintento por throttling | **5** |
+| Se devuelven al acertar tras reintentar | lo que costó ese reintento (14 o 5) |
+| Se devuelve al acertar a la primera | **1** |
+
+Con los 3 intentos por defecto, el cubo **empieza a vaciarse** por encima de un
+**~22%** de fallos transitorios sostenidos, o de un **~32%** de throttling. Por
+debajo de eso, los aciertos reponen más rápido de lo que drenan los fallos y la
+cuota no tiene ningún efecto observable. Las 500 fichas iniciales son un colchón
+pensado para absorber picos: un pico breve, por severo que sea, no bloquea nada.
+
+El cubo es **por instancia de cliente** y no se comparte entre procesos ni
+entre máquinas.
+
+### En Step Functions: el bloque `Retry`
+
+```json
+"Retry": [
+  {
+    "ErrorEquals": ["Lambda.TooManyRequestsException", "States.TaskFailed"],
+    "IntervalSeconds": 1,
+    "MaxAttempts": 3,
+    "BackoffRate": 2.0,
+    "MaxDelaySeconds": 30,
+    "JitterStrategy": "FULL"
+  }
+]
+```
+
+| Campo | Default | Qué hace |
+| --- | --- | --- |
+| `ErrorEquals` | — **obligatorio** | qué errores captura |
+| `IntervalSeconds` | `1` | espera antes del primer reintento |
+| `MaxAttempts` | `3` | `0` significa *no reintentar nunca* |
+| `BackoffRate` | `2.0` | el multiplicador entre intentos |
+| `MaxDelaySeconds` | **ninguno** | sin él **no hay techo** |
+| `JitterStrategy` | **`NONE`** | `FULL` para repartir la espera |
+
+Las dos últimas filas son toda la ficha.
+
+## El código
+
+**Lo que casi siempre está de más.** Este bucle es el reflejo natural, y en una
+llamada a un servicio de AWS es puro daño: el SDK ya reintentó tres veces por
+dentro de cada una de tus cinco vueltas.
+
+```python
+# NO. El SDK ya hace esto, y mejor.
+for intento in range(5):
+    try:
+        tabla.put_item(Item=item)
+        break
+    except ClientError:
+        time.sleep(2 ** intento)   # sin jitter, sin distinguir el error
+```
+
+**Lo que sí se escribe** es configuración, no lógica:
+
+```python
+from botocore.config import Config
+
+cfg = Config(retries={"mode": "standard", "max_attempts": 5})
+ddb = boto3.client("dynamodb", config=cfg)
+```
+
+```javascript
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+
+const ddb = new DynamoDBClient({ maxAttempts: 5 });
+```
+
+Y en la máquina de estados, los dos bloques que casi todo el mundo escribe mal —
+uno para throttling, con esperas largas, y otro para transitorios, con esperas
+cortas:
+
+```json
+"Retry": [
+  {
+    "ErrorEquals": ["Lambda.TooManyRequestsException"],
+    "IntervalSeconds": 2,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 6,
+    "MaxDelaySeconds": 60,
+    "JitterStrategy": "FULL"
+  },
+  {
+    "ErrorEquals": ["States.TaskFailed"],
+    "IntervalSeconds": 1,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 2,
+    "MaxDelaySeconds": 10,
+    "JitterStrategy": "FULL"
+  }
+]
+```
+
+El orden importa: se evalúan de arriba abajo y gana el primero que coincida. Si
+pones `States.ALL` el primero, los demás bloques son decorativos.
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="Step Functions no aplica jitter salvo que se lo pidas">
+`JitterStrategy` vale **`NONE` por defecto**. Es decir: el SDK, que reintenta por
+dentro de tu Lambda, siempre usa full jitter — y la máquina de estados que la
+invoca, no. Si mil ejecuciones fallan a la vez, sus reintentos están
+sincronizados al segundo.
+
+Y peor: **sin `MaxDelaySeconds` no hay techo ninguno**. Con `BackoffRate: 2` y
+`MaxAttempts: 10`, el último intento espera más de ocho minutos. El SDK corta en
+20 segundos pase lo que pase; Step Functions no corta en absoluto.
+
+Los dos campos son opcionales y los dos deberían estar en todos tus bloques
+`Retry`.
+</Caja>
+
+**Las capas de reintento se multiplican.** Es el error caro de este patrón.
+
+<ReintentosCapas />
+
+Tu bloque `Retry` reintenta tres veces. Dentro de cada intento, el SDK de la
+Lambda reintenta otras tres. Si además envolviste la llamada en tu propio bucle,
+son 27 llamadas por operación — todas contra el servicio que ya estaba mal.
+Antes de añadir una capa de reintentos, cuenta las que ya hay.
+
+**Reintentar lo que no se puede reintentar.** `States.Runtime` **no es
+reintentable** en absoluto, y `States.ALL` **no captura** ni `States.Runtime` ni
+`States.DataLimitExceeded`. Un `Retry` con `States.ALL` no es una red de
+seguridad universal, aunque el nombre lo sugiera. Y `States.TaskFailed` sí
+coincide con casi todo lo demás, **menos con `States.Timeout`**.
+
+**El redrive reinicia la cuenta.** Cuando redriveas una ejecución fallida, el
+contador de reintentos vuelve a **cero**. Es lo que quieres, pero significa que
+una ejecución redriveada varias veces puede haber hecho muchos más intentos de
+los que sugiere su `MaxAttempts`.
+
+**Confiar en el reintento de una operación de long polling.** `SQS.ReceiveMessage`
+y `SFN.GetActivityTask` tienen un trato especial: cuando la retry quota se agota
+y el SDK deja de reintentar, **aun así aplica la espera** antes de devolverte el
+error. Es a propósito — sin ella, tu bucle de polling recibiría el error al
+instante y volvería a llamar de inmediato, disparando la CPU del cliente justo
+durante el incidente.
+
+**DynamoDB no usa los mismos defaults.** Sus clientes —y los de DynamoDB
+Streams— vienen con **4 intentos** en vez de 3, y base transitoria de **25 ms**
+en vez de 50. Está afinado para su perfil de baja latencia: el intento extra
+mantiene el backoff máximo comparable al de los demás servicios.
+
+**El backoff decide cuándo llega a la DLQ.** Esperas largas por mensaje
+significan que un mensaje venenoso tarda mucho en agotar sus intentos. Con
+retención de cola corta, puede caducar y desaparecer **antes** de que la DLQ
+llegue a verlo.
+
+**Hace falta activarlo.** Todo lo anterior describe el comportamiento nuevo, y
+hasta que sea el default hay que pedirlo con `AWS_NEW_RETRIES_2026=true`. Sin
+esa variable, tu SDK usa el comportamiento anterior, que difiere en los tiempos
+de backoff, en el coste de la retry quota y en los defaults por servicio.
+
+## Coste
+
+Reintentar es la forma más fácil de multiplicar una factura sin cambiar una
+línea de lógica.
+
+| Dónde | Qué se paga de más |
+| --- | --- |
+| Step Functions | **cada reintento es una transición de estado**, y las transiciones son lo que se factura |
+| Lambda | duración completa de cada intento fallido, timeouts incluidos |
+| DynamoDB, SQS, S3 | una petición facturada por intento |
+| API de terceros | lo que cobren, multiplicado por tus intentos |
+
+La línea de Step Functions es la que sorprende: un `MaxAttempts: 10` en un
+estado que falla de verdad no cuesta diez veces más *ese estado*, cuesta diez
+transiciones de estado que aparecen en la factura sin distinguirse de las
+buenas.
+
+Y hay un coste que no aparece en ninguna factura: **la latencia del error**. Con
+backoff de throttling y muchos intentos, tu usuario espera minutos para recibir
+un fallo. A veces la decisión correcta es reintentar dos veces y devolver el
+error rápido, no seis y devolverlo tarde.
+
+## Fuentes
+
+Modos `standard`, `adaptive` y `legacy`; `max_attempts` por defecto **3** y
+excepción de **4** en DynamoDB y DynamoDB Streams con base transitoria de 25 ms;
+delays base de 50 ms y 1 000 ms; fórmula del backoff, full jitter y techo de
+20 s alcanzado en el 10.º y el 6.º reintento; clasificación de errores;
+cabecera `x-amz-retry-after`; retry quota de 500 fichas con coste 14 y 5, umbrales
+del ~22% y el ~32%; trato especial de las operaciones de long polling; y la
+variable `AWS_NEW_RETRIES_2026`:
+[Retry behavior — AWS SDKs and Tools Reference Guide](https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html).
+Campos del bloque `Retry`, sus valores por defecto —incluido `JitterStrategy:
+NONE`—, la ausencia de techo sin `MaxDelaySeconds`, qué no captura `States.ALL`,
+la no reintentabilidad de `States.Runtime`, la facturación de los reintentos como
+transiciones de estado y el reinicio del contador al redrivear:
+[Error handling in Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html).

@@ -1,0 +1,61 @@
+---
+import Diagrama from './Diagrama.astro';
+import Etiqueta from './Etiqueta.astro';
+
+/*
+  Sesenta clientes que fallan a la vez. Cada marca es un reintento y la única
+  variable es DÓNDE cae en el eje del tiempo: misma cantidad arriba y abajo,
+  distinto reparto. Si cambiara también la altura o el número, el diagrama
+  estaría contando dos cosas y no se entendería ninguna.
+
+  El azar es determinista a propósito — el mismo build tiene que dar el mismo
+  dibujo. LCG de Lehmer: el producto máximo (2 147 483 646 × 48 271) cabe de
+  sobra en un double, así que no hay pérdida de precisión.
+*/
+const N = 60;
+const X0 = 168;
+const ANCHO = 430;
+
+let semilla = 7;
+const azar = () => {
+  semilla = (semilla * 48271) % 2147483647;
+  return semilla / 2147483647;
+};
+
+// Sin jitter: todos en el mismo instante. El ±9 px no es jitter disfrazado —
+// es lo mínimo para que se vean sesenta trazos amontonados en vez de una raya
+// roja que se leería como UNA marca, que es justo lo contrario de lo que dice.
+const juntas = Array.from({ length: N }, () => X0 + ANCHO * 0.5 + (azar() - 0.5) * 18);
+const sueltas = Array.from({ length: N }, () => X0 + azar() * ANCHO);
+---
+
+<Diagrama
+  ancho={700}
+  alto={272}
+  titulo="Sesenta clientes fallan a la vez y reintentan. Sin jitter, las sesenta marcas caen amontonadas en el mismo instante y forman un pico. Con full jitter, las mismas sesenta marcas se reparten de forma uniforme por toda la ventana de espera."
+  pie="<strong>El jitter no quita reintentos: los reparte.</strong> Son las mismas sesenta llamadas en los dos casos. Sin él, mil clientes que reciben un 503 a la vez vuelven a golpear a la vez, y el servicio que se estaba recuperando recibe otro pico igual de alto que el que lo tiró."
+>
+  <Etiqueta x={24} y={36} texto="Sin jitter" estilo="peligro" ancla="start" />
+  <Etiqueta x={24} y={52} texto="espera fija: base × 2ⁿ" ancla="start" />
+  <path d={`M${X0},88 L${X0 + ANCHO},88`} class="eje" />
+  {juntas.map((x) => <path d={`M${x},56 L${x},88`} class="marca marca--pico" />)}
+  <Etiqueta x={X0 + ANCHO * 0.5} y={110} texto="las 60, en el mismo milisegundo" estilo="peligro" />
+
+  <Etiqueta x={24} y={182} texto="Con full jitter" estilo="bien" ancla="start" />
+  <Etiqueta x={24} y={198} texto="random(0,1) × base × 2ⁿ" ancla="start" />
+  <path d={`M${X0},234 L${X0 + ANCHO},234`} class="eje" />
+  {sueltas.map((x) => <path d={`M${x},202 L${x},234`} class="marca marca--reparto" />)}
+  <Etiqueta x={X0 + ANCHO * 0.5} y={256} texto="las mismas 60, repartidas por toda la ventana" estilo="bien" />
+
+  <Etiqueta x={X0 - 8} y={92} texto="t = 0" ancla="end" />
+  <Etiqueta x={X0 - 8} y={238} texto="t = 0" ancla="end" />
+  <Etiqueta x={X0 + ANCHO + 8} y={92} texto="espera máxima" ancla="start" />
+  <Etiqueta x={X0 + ANCHO + 8} y={238} texto="espera máxima" ancla="start" />
+</Diagrama>
+
+<style>
+  .eje { stroke: var(--linea-fuerte); stroke-width: 1.25; fill: none; }
+  .marca { stroke-width: 1.5; fill: none; }
+  .marca--pico { stroke: var(--peligro); opacity: .55; }
+  .marca--reparto { stroke: var(--bien); opacity: .85; }
+</style>

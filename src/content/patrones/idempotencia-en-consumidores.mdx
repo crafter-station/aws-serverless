@@ -8,6 +8,11 @@ intencion: Procesar el mismo mensaje dos veces produce exactamente el mismo resu
 verificado_en: "2026-09-06"
 servicios: [sqs, sns, lambda, dynamodb]
 relacionados:
+  - patron: retry-con-backoff-y-jitter
+    tipo: requiere
+    porque: >-
+      Es el patrón que hace seguro reintentar. El backoff decide cuándo se
+      repite la llamada; la idempotencia decide que repetirla no haga daño.
   - patron: batching-y-fallo-parcial
     tipo: se combina con
     porque: >-

@@ -1,0 +1,35 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const FILAS = [56, 158, 260];
+---
+
+<Diagrama
+  ancho={700}
+  alto={392}
+  tono="roto"
+  titulo="Una sola operación lógica atraviesa dos capas de reintento. Step Functions la intenta tres veces y, dentro de cada intento, el SDK reintenta otras tres, de modo que el servicio de destino recibe nueve llamadas por una operación."
+  pie="<strong>Las capas de reintento no se suman: se multiplican.</strong> Cada una parece razonable por separado, y casi nadie las cuenta juntas. Tres por tres son nueve llamadas al servicio que ya estaba en apuros — que es justo cuando menos le convienen."
+>
+  <Nodo x={24} y={158} titulo="1 operación" />
+
+  <Marco x={168} y={24} ancho={318} alto={318} etiqueta="Retry de Step Functions · MaxAttempts 3" tono="peligro" />
+
+  {FILAS.map((y, i) => (
+    <Fragment>
+      <Nodo x={212} y={y} titulo={`intento ${i + 1}`} tam={40} />
+      <Nodo x={388} y={y} titulo="×3 del SDK" sub="max_attempts 3" tam={40} />
+      <Flecha de={[256, y + 20]} a={[386, y + 20]} />
+      <Flecha de={[78, 184]} a={[210, y + 20]} curva={(i - 1) * 10} />
+    </Fragment>
+  ))}
+
+  <Nodo x={584} y={158} titulo="9 llamadas" sub="al mismo destino" />
+  <Flecha de={[488, 184]} a={[582, 184]} tipo="fallo" etiqueta="3 × 3" />
+
+  <Etiqueta x={350} y={376} texto="Añade el reintento del propio cliente y ya van 27" estilo="peligro" />
+</Diagrama>
