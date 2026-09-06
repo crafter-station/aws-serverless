@@ -1,7 +1,217 @@
 ---
 titulo: EventBridge
+nombre_completo: Amazon EventBridge
 icono: amazon-event-bridge
-estado: esbozo
+estado: listo
+en_una_frase: >-
+  Un bus de eventos que enruta por el contenido del mensaje: en vez de
+  suscribirte a un canal, declaras un patrón sobre el JSON y EventBridge te
+  manda lo que encaje.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: Se enruta por contenido, no por canal
+    explicacion: >-
+      En SNS te suscribes a un topic y recibes todo lo que se publique en él.
+      Aquí publicas en un bus y escribes reglas con un patrón sobre el JSON del
+      evento: "los pedidos de España por encima de 500 €". El productor no
+      declara destinos y el consumidor no pide permiso — declara qué le
+      interesa.
+  - termino: Cinco destinos por regla, y es un muro
+    explicacion: >-
+      Una regla puede tener como máximo 5 targets y ese límite no se amplía. No
+      es un detalle administrativo: moldea el diseño. En cuanto un evento
+      interesa a seis consumidores necesitas varias reglas, y eso cambia cómo
+      organizas el bus.
+  - termino: Archivo y repetición
+    explicacion: >-
+      EventBridge puede archivar los eventos que pasan por un bus y reproducirlos
+      después sobre una regla. Es lo que SNS estándar no tiene, y suele ser la
+      razón real por la que se elige EventBridge: poder arreglar un consumidor
+      con un bug de tres días y volver a pasarle esos tres días.
+limites:
+  - concepto: Destinos por regla
+    valor: 5
+    tipo: hard
+    nota: El límite que moldea el diseño. No se amplía de ninguna manera.
+  - concepto: Reglas con comodines
+    valor: 30 por bus
+    tipo: hard
+    nota: Solo 30 reglas por bus pueden usar wildcards en sus patrones. No ajustable.
+  - concepto: PutEvents — us-east-1, us-west-2, eu-west-1
+    valor: 10 000 por segundo
+    tipo: soft
+  - concepto: PutEvents — resto de regiones
+    valor: 400 por segundo
+    tipo: soft
+    nota: >-
+      Ohio, Fráncfort y España van a 2 400; Tokio, Irlanda-2, Sídney, Singapur y
+      Londres a 1 200; muchas otras a 600. Fuera de las tres grandes, el suelo
+      son 400.
+  - concepto: Invocaciones — us-east-1, us-west-2, eu-west-1
+    valor: 18 750 por segundo
+    tipo: soft
+    nota: Una invocación es un evento que encaja con una regla y se envía a sus destinos.
+  - concepto: Invocaciones — resto de regiones
+    valor: 750 por segundo
+    tipo: soft
+    nota: Superado el límite no se pierden — se retrasan.
+  - concepto: Reglas por bus
+    valor: 300
+    tipo: soft
+    nota: 100 en Ciudad del Cabo y Milán.
+  - concepto: Buses de eventos por cuenta
+    valor: 100
+    tipo: soft
+  - concepto: Tamaño del patrón de evento
+    valor: 2 048 caracteres
+    tipo: soft
+  - concepto: Política del bus de eventos
+    valor: 10 240 caracteres
+    tipo: soft
+    nota: Crece cada vez que das acceso a otra cuenta. Es el techo del multi-cuenta.
+  - concepto: API destinations
+    valor: 3 000 por cuenta
+    tipo: soft
+  - concepto: Invocaciones por API destination
+    valor: 300 por segundo
+    tipo: soft
+  - concepto: API del plano de control
+    valor: 50 por segundo
+    tipo: hard
+  - concepto: Niveles de anidamiento en schema discovery
+    valor: 255
+    tipo: hard
+    nota: Lo que esté más profundo se ignora.
+  - concepto: Conexiones privadas
+    valor: 20 por cuenta
+    tipo: hard
 ---
 
-Por escribir.
+## Modelo mental
+
+SNS y EventBridge resuelven el mismo problema —un productor, varios consumidores
+que no se conocen— y lo resuelven al revés el uno del otro.
+
+En **SNS** el productor elige el canal: publica en el topic `pedidos` y quien
+esté suscrito a `pedidos` lo recibe todo. El acoplamiento no ha desaparecido, se
+ha movido: ahora está en el nombre del topic, y por eso los sistemas con SNS
+acaban con veinte topics y una convención de nombres que nadie recuerda.
+
+En **EventBridge** el productor publica en un bus y ya está. Es el **consumidor**
+quien declara qué le interesa, con una regla que contiene un patrón sobre el
+JSON del evento:
+
+```json
+{
+  "detail-type": ["PedidoCreado"],
+  "detail": {
+    "pais": ["ES"],
+    "importe": [{ "numeric": [">", 500] }]
+  }
+}
+```
+
+Nadie tuvo que crear un topic `pedidos-españa-grandes`. El productor no sabe que
+esa regla existe y no se entera si mañana desaparece.
+
+Ese cambio de dirección es el que hace que EventBridge escale organizativamente:
+**añadir un consumidor no toca nada de lo que ya existe**, ni siquiera la
+configuración del productor. Es la razón por la que aparece en cuanto hay varios
+equipos publicando en el mismo sitio.
+
+### Lo que se paga a cambio
+
+Tres cosas, y conviene tenerlas claras antes de elegirlo por moda:
+
+- **Menos throughput.** Fuera de Virginia, Oregón e Irlanda, `PutEvents` cae a
+  2 400, a 1 200, a 600 o a **400 por segundo**. SNS, en las mismas regiones
+  pequeñas, da 300 — son órdenes parecidos, pero si estabas en us-east-1
+  mirando 10 000, el salto al desplegar en otra región es brusco.
+- **Más latencia.** Evaluar patrones cuesta más que copiar un mensaje a una
+  cola.
+- **Cinco destinos por regla**, y es un muro.
+
+### El archivo es lo que suele decidir
+
+EventBridge puede **archivar** todo lo que pasa por un bus y **reproducirlo**
+después. Eso es lo que SNS estándar no tiene y no va a tener: en SNS, un
+consumidor que estuvo tres días con un bug perdió tres días de eventos y no hay
+manera de recuperarlos.
+
+Si alguna vez has tenido que pedir a otro equipo que te reenvíe eventos a mano,
+ya sabes cuánto vale esa casilla.
+
+## Cómo te factura
+
+Por evento publicado, y con una asimetría que conviene conocer:
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| Eventos personalizados (los tuyos) | ~1,00 USD / millón |
+| Eventos de servicios de AWS al bus por defecto | sin coste |
+| Archivo y repetición | por GB almacenado y por evento reproducido |
+| API destinations | por invocación |
+
+Comparado con SNS —del orden de 0,50 USD por millón de publicaciones, con las
+entregas a SQS y Lambda gratis— **EventBridge sale claramente más caro por
+evento**. La diferencia se paga por el enrutado por contenido, el archivo y el
+replay. Si no vas a usar ninguna de las tres, estás pagando de más.
+
+Detalle útil: los eventos que generan los propios servicios de AWS hacia el bus
+por defecto no se facturan. Reaccionar a un cambio de estado de EC2 o a un
+`Object Created` de S3 es gratis; publicar tus propios eventos de dominio, no.
+
+## Cuándo NO usarlo
+
+- **Fan-out simple sin reglas.** Si todos los consumidores quieren todos los
+  eventos, SNS es más rápido, más barato y aguanta más. Las reglas de
+  EventBridge no aportan nada cuando no filtras.
+- **Throughput alto fuera de las tres regiones grandes.** 400 `PutEvents` por
+  segundo se alcanza antes de lo que parece.
+- **Necesitas orden.** No hay ordenación de ningún tipo.
+- **Necesitas latencia mínima.** Entre el `PutEvents` y el destino hay
+  evaluación de patrones. Para un camino crítico y corto, una cola directa.
+- **Un evento tiene que llegar a más de cinco sitios y no quieres varias
+  reglas.** El límite es duro; el diseño tiene que contar con él.
+
+## Errores comunes
+
+**Chocar contra los cinco destinos.** Es el límite que más sorprende porque no
+se puede ampliar. La salida habitual es partir en varias reglas con el mismo
+patrón, o poner una cola en medio y hacer el fan-out ahí.
+
+**Suponer el throughput de us-east-1.** Es el mismo error que con SNS y con API
+Gateway, y se repite porque todos los tutoriales están escritos en Virginia. Si
+despliegas en São Paulo, tu `PutEvents` va a 600 y tus invocaciones a 750.
+
+**Patrones que no caben.** El patrón de evento tiene un techo de **2 048
+caracteres**. Una lista larga de valores permitidos lo agota rápido, y entonces
+toca dividir la regla.
+
+**Abusar de los comodines.** Solo **30 reglas por bus** pueden llevar wildcards
+en su patrón, y ese límite no se ajusta. Es un recurso escaso: gástalo donde
+haga falta de verdad.
+
+**Meter todo en el bus por defecto.** El bus por defecto recibe además los
+eventos de todos los servicios de AWS de tu cuenta. Mezclar ahí tus eventos de
+dominio complica los patrones y complica los permisos. Crea un bus propio.
+
+**No poner DLQ en el destino.** Si el destino falla, EventBridge reintenta y
+luego descarta. Cada target admite su propia cola de mensajes fallidos, y sin
+ella los eventos se pierden en silencio.
+
+**Olvidar el techo de la política del bus.** Son **10 240 caracteres** y crece
+cada vez que das acceso a otra cuenta. En una organización con muchas cuentas es
+un límite real, no teórico.
+
+## Fuentes
+
+Todas las cuotas —destinos por regla, reglas con comodines, `PutEvents` e
+invocaciones por región, reglas y buses, tamaño de patrón y de política, API
+destinations y plano de control—, y qué se puede ampliar y qué no:
+[Amazon EventBridge quotas](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-quota.html).
+Cuotas de SNS usadas en la comparación:
+[Amazon SNS endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/sns.html).
+Los importes proceden de las páginas de precios de AWS, que se renderizan
+dinámicamente y no pudieron citarse literalmente: trátalos como orden de
+magnitud.

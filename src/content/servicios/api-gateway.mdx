@@ -1,7 +1,232 @@
 ---
 titulo: API Gateway
+nombre_completo: Amazon API Gateway
 icono: amazon-api-gateway
-estado: esbozo
+estado: listo
+en_una_frase: >-
+  La puerta HTTP de tu sistema serverless: recibe la petición, la autoriza, la
+  limita y se la pasa a quien toque — con un cronómetro de 29 segundos corriendo
+  desde el primer byte.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: REST API y HTTP API son dos productos distintos
+    explicacion: >-
+      Comparten nombre y consola, pero no son versiones de lo mismo. HTTP API
+      es más nuevo, más rápido y cuesta del orden de la tercera parte. REST API
+      tiene lo que HTTP API no: caché, planes de uso y claves, validación de
+      peticiones, mapping templates y WAF. Elegir por inercia el que sale
+      primero en el tutorial es la decisión más cara del servicio.
+  - termino: El cronómetro de 29 segundos
+    explicacion: >-
+      El timeout de integración por defecto son 29 000 ms y solo se puede
+      ampliar en APIs regionales y privadas — en las edge-optimized es un muro.
+      Todo lo que tarde más que eso no es una petición HTTP: es un trabajo, y
+      necesita responder 202 y avisar por otro canal.
+  - termino: El throttle es de la cuenta, no del API
+    explicacion: >-
+      Los 10 000 RPS por defecto se reparten entre todas tus APIs REST, HTTP y
+      WebSocket de esa región. Un endpoint interno sin límites propios puede
+      consumir el cupo y tirar tu API de producción. La defensa es poner
+      throttling por etapa y por método, no confiar en el total.
+limites:
+  - concepto: Tamaño de payload
+    valor: 10 MB
+    tipo: hard
+    nota: >-
+      Pero si detrás hay una Lambda síncrona, el techo real son sus 6 MB. El
+      límite que te frena no es el de la puerta.
+  - concepto: Timeout de integración
+    valor: 29 000 ms (29 s)
+    tipo: soft
+    nota: Solo ampliable en APIs regionales y privadas. En edge-optimized no se toca.
+  - concepto: Throttle por cuenta y región
+    valor: 10 000 RPS · 2 500 en 14 regiones
+    tipo: soft
+    nota: >-
+      Ciudad del Cabo, Milán, Yakarta, Zúrich, Tel Aviv, Calgary, México y siete
+      más van a la cuarta parte.
+  - concepto: Ráfaga (burst)
+    valor: 5 000 · 1 250 en esas mismas regiones
+    tipo: hard
+    nota: La determina el equipo de AWS a partir del RPS de la cuenta. No se pide.
+  - concepto: Recursos o rutas por API REST/WebSocket
+    valor: 300
+    tipo: soft
+  - concepto: Rutas por HTTP API
+    valor: 300
+    tipo: soft
+  - concepto: Etapas por API
+    valor: 10
+    tipo: soft
+  - concepto: Tamaño combinado de cabeceras
+    valor: 10 240 bytes
+    tipo: hard
+  - concepto: Resultado de un autorizador Lambda
+    valor: 8 KB
+    tipo: hard
+  - concepto: Respuesta cacheada
+    valor: 1 048 576 bytes (1 MB)
+    tipo: hard
+  - concepto: TTL máximo de la caché
+    valor: 3 600 segundos
+    tipo: hard
+  - concepto: APIs edge-optimized
+    valor: 120 por región
+    tipo: hard
+  - concepto: APIs regionales y APIs privadas
+    valor: 600 de cada
+    tipo: hard
+  - concepto: Dominios personalizados
+    valor: 120
+    tipo: soft
+  - concepto: Claves de API
+    valor: 10 000
+    tipo: hard
+  - concepto: Planes de uso
+    valor: 300
+    tipo: soft
+  - concepto: Duración de conexión WebSocket
+    valor: 7 200 s (2 h) · 600 s de inactividad
+    tipo: hard
+  - concepto: Mensaje WebSocket
+    valor: 128 KB · frames de 32 KB
+    tipo: hard
+  - concepto: Nuevas conexiones WebSocket
+    valor: 500 por segundo
+    tipo: soft
+  - concepto: Iteraciones en un mapping template
+    valor: 1 000
+    tipo: hard
+  - concepto: CreateDeployment
+    valor: 1 petición cada 5 segundos
+    tipo: hard
+    nota: Los pipelines que despliegan muchas APIs en paralelo se estrangulan aquí.
 ---
 
-Por escribir.
+## Modelo mental
+
+API Gateway es **un portero, no un servidor**. No ejecuta tu código: recibe la
+petición, decide si pasa, la cuenta, y se la entrega a otro. Todo lo que hace
+cabe en cuatro verbos —autorizar, limitar, transformar, enrutar— y todo lo que
+te va a doler viene de olvidar el quinto que no hace: **esperar mucho rato**.
+
+### Dos productos, un nombre
+
+Lo primero que hay que resolver es cuál de los dos vas a usar, porque no son
+versiones de lo mismo:
+
+| | HTTP API | REST API |
+| --- | --- | --- |
+| Precio | del orden de 1/3 | referencia |
+| Latencia añadida | menor | mayor |
+| Caché de respuestas | no | sí |
+| Planes de uso y claves | no | sí |
+| Mapping templates (VTL) | no | sí |
+| Validación de peticiones | no | sí |
+| WAF | no | sí |
+
+La regla práctica: **empieza por HTTP API**. Si tu API está delante de unas
+Lambdas y usa JWT o IAM para autorizar, HTTP API hace exactamente lo mismo por
+una fracción del precio. Cambia a REST cuando necesites una de esas casillas de
+la derecha, no antes — y sabiendo que la estás pagando en cada petición durante
+toda la vida del sistema.
+
+### Los 29 segundos son un límite de diseño, no de configuración
+
+El timeout de integración por defecto son 29 segundos. Se puede subir, pero
+**solo en APIs regionales y privadas**; en las edge-optimized es un muro.
+
+Más importante que el número es lo que implica: si tu operación puede tardar
+más, no la arregles subiendo el timeout. Una petición HTTP que tarda un minuto
+es mala arquitectura aunque el timeout lo permita — el cliente reintenta, el
+móvil pierde la conexión, el balanceador de en medio se cansa. Lo que quieres es
+responder `202 Accepted` con un identificador, hacer el trabajo por detrás y
+avisar por WebSocket, por polling o por evento.
+
+### El cupo es compartido
+
+Los 10 000 RPS por defecto son **de la cuenta y de la región**, sumando todas
+tus APIs REST, HTTP y WebSocket. Y en catorce regiones —Ciudad del Cabo, Milán,
+Yakarta, Zúrich, Tel Aviv, Calgary, México y siete más— el valor por defecto es
+**2 500**, la cuarta parte.
+
+La consecuencia es la misma que en Lambda con la concurrencia: un endpoint
+interno mal diseñado, o un job que golpea tu propia API en bucle, puede dejar
+sin cupo a producción. Por eso el throttling por etapa y por método no es una
+optimización, es aislamiento.
+
+## Cómo te factura
+
+Por petición, y la diferencia entre los dos productos es el número que más
+mueve la factura:
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| HTTP API | ~1,00 USD / millón |
+| REST API | ~3,50 USD / millón |
+| Caché de respuestas (solo REST) | por hora y por tamaño de caché |
+| Transferencia de datos | aparte |
+
+Es decir: **REST cuesta del orden de 3,5 veces lo mismo**. En una API con 100
+millones de peticiones al mes eso son cientos de dólares mensuales de diferencia
+por unas funciones que quizá no usas.
+
+La caché de REST se paga por hora **exista tráfico o no**, igual que la
+concurrencia aprovisionada de Lambda: un coste fijo dentro de un servicio que
+compraste por ser variable.
+
+## Cuándo NO usarlo
+
+- **Sirves contenido estático.** CloudFront delante de S3 es más rápido y
+  mucho más barato. API Gateway está para APIs.
+- **La operación pasa de 29 segundos.** Devuelve `202` y avisa por otro canal.
+- **Solo una función y sin autorización compleja.** Una *Lambda Function URL* te
+  da un endpoint HTTPS sin API Gateway en medio, sin su coste y sin su latencia.
+- **Tu llamador es tu propio backend dentro de AWS.** Si nadie de fuera de tu
+  cuenta va a llamar, invocar la Lambda directamente evita un salto, un coste y
+  un modo de fallo.
+- **Volumen muy alto y ya tienes VPC.** A partir de cierto tráfico un ALB con
+  destino Lambda sale más barato, a cambio de perder claves, planes de uso y
+  autorizadores.
+
+## Errores comunes
+
+**Elegir REST API por inercia.** Es lo que aparece primero en la consola y en la
+mitad de los tutoriales. Si no vas a usar caché, planes de uso, VTL ni WAF,
+estás pagando 3,5 veces de más para siempre.
+
+**Confundir el límite de payload con el límite real.** API Gateway admite
+**10 MB**, pero una Lambda síncrona admite **6 MB**. El techo efectivo es el
+menor de los dos, y el error que ves menciona a Lambda, no a la puerta.
+
+**No poner throttling por etapa ni por método.** Sin ellos, cualquier consumidor
+puede llevarse el cupo de la cuenta entera.
+
+**Autorizadores Lambda sin caché.** Cada petición se convierte en dos
+invocaciones. Con el TTL del autorizador bien puesto, la segunda desaparece para
+la mayoría del tráfico. Y recuerda que su resultado no puede pasar de **8 KB**.
+
+**Olvidar desplegar la etapa.** En REST API los cambios no existen hasta que
+haces un `CreateDeployment`. Y ese `CreateDeployment` está limitado a **una
+petición cada 5 segundos por cuenta**, cosa que descubren los pipelines que
+despliegan muchas APIs a la vez.
+
+**Meter lógica en mapping templates.** VTL solo existe en REST API, no se puede
+probar en local con comodidad y no aparece en ninguna traza. Cada línea de VTL
+es lógica de negocio escondida donde nadie la busca.
+
+**Suponer que tu región va a 10 000 RPS.** En catorce regiones el valor por
+defecto es 2 500, y el burst 1 250 — y ese burst **no se puede pedir**: lo fija
+AWS a partir del RPS de tu cuenta.
+
+## Fuentes
+
+Todas las cuotas —payload, timeout de integración, throttle y burst por región,
+recursos y rutas, etapas, cabeceras, autorizadores, caché, WebSocket y
+`CreateDeployment`—, y qué se puede ampliar y qué no:
+[Amazon API Gateway endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/apigateway.html)
+y [Amazon API Gateway quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html).
+Límite de payload síncrono de Lambda:
+[Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html).
+Los importes proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente: trátalos como orden de magnitud.
