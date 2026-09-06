@@ -1,0 +1,215 @@
+---
+titulo: Step Functions
+nombre_completo: AWS Step Functions
+icono: aws-step-functions
+estado: listo
+en_una_frase: >-
+  Una máquina de estados gestionada que ejecuta tu proceso paso a paso, recuerda
+  dónde va, reintenta lo que falla y te enseña en un dibujo por dónde se rompió.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: Standard y Express son dos servicios distintos
+    explicacion: >-
+      Standard dura hasta un año, garantiza ejecución exactamente-una-vez y se
+      factura por transición de estado. Express dura 5 minutos, es
+      al-menos-una-vez y se factura por ejecución y duración. Y el tipo es
+      inmutable: no se puede cambiar después de crear la máquina de estados.
+  - termino: El estado viaja como JSON, y pesa
+    explicacion: >-
+      La entrada y la salida de cada estado son JSON, con un techo duro de
+      256 KiB. Todo lo que pasa entre pasos cuenta, así que un proceso que
+      arrastra el documento entero de un estado a otro choca contra ese muro y
+      falla a mitad.
+  - termino: Los reintentos son configuración, no código
+    explicacion: >-
+      Retry y Catch se declaran en la definición: qué errores, cuántas veces,
+      con qué backoff, y a dónde saltar cuando se agotan. Es la razón principal
+      para usar Step Functions — esa lógica deja de estar repartida por cinco
+      funciones.
+limites:
+  - concepto: Duración máxima — Standard
+    valor: 1 año
+    tipo: hard
+  - concepto: Duración máxima — Express
+    valor: 5 minutos
+    tipo: hard
+    nota: Al pasarse falla con States.Timeout.
+  - concepto: Entrada o salida de un estado
+    valor: 256 KiB en UTF-8
+    tipo: hard
+    nota: >-
+      Aplica a tareas, estados y ejecuciones. Es el límite que obliga a pasar
+      referencias a S3 en vez de documentos.
+  - concepto: Historial de ejecución — Standard
+    valor: 25 000 eventos
+    tipo: hard
+    nota: Al alcanzarlo la ejecución FALLA. En Express es ilimitado.
+  - concepto: Definición de la máquina de estados
+    valor: 1 MB
+    tipo: hard
+  - concepto: Tamaño de petición a la API
+    valor: 1 MB
+    tipo: hard
+  - concepto: Transiciones de estado — us-east-1, us-west-2, eu-west-1
+    valor: 5 000 por segundo
+    tipo: soft
+  - concepto: Transiciones de estado — resto de regiones
+    valor: 800 por segundo
+    tipo: soft
+    nota: Seis veces menos. En Express no hay límite de transiciones.
+  - concepto: StartExecution — Standard
+    valor: 300/s en las tres regiones grandes · 150/s en el resto
+    tipo: soft
+  - concepto: StartExecution — Express
+    valor: 6 000 por segundo
+    tipo: soft
+  - concepto: Cuenta nueva
+    valor: cuota de transiciones reducida
+    tipo: soft
+    nota: Como en Lambda, AWS la sube automáticamente según el uso.
+  - concepto: Ejecuciones abiertas por cuenta
+    valor: 1 000 000
+    tipo: soft
+    nota: Solo Standard. Al superarlo, ExecutionLimitExceeded.
+  - concepto: Retención del historial
+    valor: 90 días tras cerrar la ejecución
+    tipo: soft
+    nota: Reducible a 30 días por petición. En Express hay que activar CloudWatch Logs.
+  - concepto: Periodo para redrive
+    valor: 14 días
+    tipo: hard
+    nota: No existe en Express.
+  - concepto: Duración de una HTTP Task
+    valor: 60 segundos
+    tipo: hard
+  - concepto: Ejecuciones hijas en paralelo en un Map distribuido
+    valor: 10 000
+    tipo: hard
+  - concepto: Longitud de los nombres
+    valor: 80 caracteres
+    tipo: hard
+---
+
+## Modelo mental
+
+Step Functions es **una máquina de estados que se acuerda de dónde va**.
+
+Esa memoria es todo el producto. Una función Lambda que orquesta cinco pasos
+tiene que mantener el progreso en algún sitio, capturar los fallos de cada paso,
+decidir qué reintentar y qué deshacer, y todo eso vive en tu código y se pierde
+si la función muere. Step Functions guarda ese estado fuera, entre transiciones,
+y te lo dibuja.
+
+Lo que compras, en concreto:
+
+- **Persistencia entre pasos**, hasta un año en Standard.
+- **Reintentos y capturas declarativos**: `Retry` y `Catch` en la definición, no
+  repartidos por cinco funciones.
+- **Un dibujo de la ejecución** que dice exactamente en qué estado se rompió y
+  con qué entrada — que en un sistema asíncrono es media depuración resuelta.
+
+### Standard y Express no son dos tamaños de lo mismo
+
+Es la primera decisión y **no se puede cambiar después**: el tipo de flujo es
+inmutable una vez creada la máquina de estados.
+
+| | Standard | Express |
+| --- | --- | --- |
+| Duración | 1 año | 5 minutos |
+| Semántica | **exactamente una vez** | al menos una vez (asíncrono) |
+| Historial | 25 000 eventos, y falla al llegar | ilimitado |
+| Facturación | por transición de estado | por ejecución, duración y memoria |
+| Callback `.waitForTaskToken` | sí | **no** |
+| Espera a un job `.sync` | sí | **no** |
+
+La frase de AWS que decide la elección: Standard *"sigue un modelo de
+exactamente-una-vez, donde tus tareas y estados nunca se ejecutan más de una
+vez"*, lo que lo hace adecuado para orquestar **acciones no idempotentes** —
+cobrar un pago, arrancar un clúster—. Express es al-menos-una-vez y encaja con
+**acciones idempotentes**.
+
+Traducido: si tu proceso cobra dinero, quieres Standard. Si transforma y guarda,
+Express es más barato.
+
+### La cuenta que hay que hacer antes
+
+Standard se factura **por transición de estado**. Cada paso que se completa es
+una transición, y ahí está la trampa económica del servicio: un flujo con veinte
+estados que se ejecuta un millón de veces al mes son veinte millones de
+transiciones. Para procesos de alto volumen y corta duración, Express suele ser
+uno o dos órdenes de magnitud más barato.
+
+## Cómo te factura
+
+| Tipo | Modelo | Precio aproximado |
+| --- | --- | --- |
+| Standard | por transición de estado | ~25 USD / millón de transiciones |
+| Express | por ejecución, duración y memoria | mucho más barato a volumen |
+
+La regla mental: **Standard cobra por pasos, Express por tiempo**. Un flujo de
+tres estados que espera dos días paga tres transiciones en Standard; en Express
+ni siquiera cabría. Un flujo de treinta estados que dura 400 ms y se ejecuta un
+millón de veces al día es carísimo en Standard y trivial en Express.
+
+Y algo que no se factura y conviene recordar: **esperar es gratis** en Standard.
+Un estado `Wait` de tres días cuesta una transición, no tres días de cómputo. Es
+la diferencia fundamental con mantener una Lambda viva, y la razón por la que
+los procesos con esperas largas viven aquí.
+
+## Cuándo NO usarlo
+
+- **Son dos pasos y nunca van a ser más.** Una Lambda que llama a otra cosa y
+  gestiona su error no necesita una máquina de estados. La complejidad de
+  Step Functions se paga en definición JSON y en despliegue.
+- **Alto volumen y latencia crítica.** Cada transición añade latencia. Para un
+  camino síncrono de milisegundos, orquestar en código es más rápido.
+- **El proceso es reactivo, no dirigido.** Si cada servicio reacciona a los
+  eventos de otro sin que nadie mande, eso es coreografía con EventBridge, no
+  orquestación.
+- **La lógica cabe en un bucle.** Expresar un algoritmo en Amazon States
+  Language es incómodo a propósito: ASL sirve para coordinar pasos, no para
+  calcular.
+- **El estado que viaja pesa.** Con documentos de megabytes chocarás contra los
+  256 KiB entre estados y acabarás pasando referencias a S3 — que está bien,
+  pero conviene saberlo antes de diseñar.
+
+## Errores comunes
+
+**Elegir el tipo sin pensarlo.** Es inmutable. Cambiar de Standard a Express
+significa crear otra máquina de estados y migrar todo lo que la invoca.
+
+**Pasar el documento entero entre estados.** El techo son **256 KiB** e incluye
+la entrada, la salida y lo que arrastres. La solución es guardar en S3 y pasar
+la clave, pero hay que diseñarlo desde el principio.
+
+**Ignorar el límite de 25 000 eventos del historial.** No es un aviso: la
+ejecución **falla**. Un bucle que itera cinco mil veces genera decenas de miles
+de eventos y revienta a mitad. La salida es dividir en ejecuciones hijas.
+
+**Suponer que tu región va a 5 000 transiciones.** Fuera de Virginia, Oregón e
+Irlanda son **800 por segundo**. Es el mismo patrón que en SNS, EventBridge y
+API Gateway.
+
+**Escribir los reintentos en el código.** Si tu Lambda tiene un `for` con
+backoff, estás pagando duración de Lambda por esperar. `Retry` en la definición
+lo hace fuera y gratis.
+
+**Usar Express y esperar callbacks.** Express **no soporta**
+`.waitForTaskToken` ni la espera a jobs con `.sync`. Cualquier paso que exija
+aprobación humana o esperar a un proceso externo obliga a Standard.
+
+**Olvidar que el historial caduca.** 90 días en Standard, y en Express no hay
+historial en absoluto salvo que actives CloudWatch Logs. Si te enteras del
+problema tarde, puede que ya no haya nada que mirar.
+
+## Fuentes
+
+Duraciones máximas, tamaño de entrada y salida, límite de eventos del historial,
+transiciones de estado y `StartExecution` por región, ejecuciones abiertas,
+retención, periodo de redrive y el aviso sobre cuentas nuevas:
+[Step Functions service quotas](https://docs.aws.amazon.com/step-functions/latest/dg/limits-overview.html).
+Comparación Standard/Express, inmutabilidad del tipo, semántica de ejecución y
+patrones de integración no soportados en Express:
+[Choosing workflow type in Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html).
+Los importes proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente: trátalos como orden de magnitud.

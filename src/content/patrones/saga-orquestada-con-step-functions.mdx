@@ -1,7 +1,323 @@
 ---
 titulo: Saga orquestada con Step Functions
+alias: Orchestrated saga
 familia: Fiabilidad
-estado: esbozo
+estado: listo
+dificultad: 3
+intencion: Coordinar una operación que toca varios servicios sin transacción distribuida, ejecutando los pasos en orden y deshaciéndolos con compensaciones explícitas cuando uno falla.
+verificado_en: "2026-09-06"
+servicios: [step-functions, lambda, dynamodb, sqs]
+relacionados:
+  - patron: idempotencia-en-consumidores
+    tipo: se combina con
+    porque: >-
+      Step Functions reintenta los pasos que fallan. Un paso no idempotente
+      convierte un reintento rutinario en un cobro doble, y el Retry declarativo
+      hace que esos reintentos sean más frecuentes, no menos.
+  - patron: dlq-y-redrive
+    tipo: compite con
+    porque: >-
+      Los dos gestionan el fallo persistente en planos distintos: la DLQ aparta
+      el mensaje para que lo mire un humano, la saga define qué se deshace
+      automáticamente. Si el fallo tiene una compensación de negocio, querías
+      una saga.
+  - patron: saga-por-coreografia
+    tipo: compite con
+    porque: >-
+      Mismo problema, reparto opuesto: aquí hay un director que conoce todos los
+      pasos, allí cada servicio reacciona al evento del anterior y nadie tiene
+      la foto completa.
+  - patron: claim-check
+    tipo: se combina con
+    porque: >-
+      Entre estados solo caben 256 KiB. Los procesos que mueven documentos
+      grandes pasan la clave de S3 y no el contenido.
 ---
 
-Por escribir.
+import SagaCompensacion from '../../components/diagrama/SagaCompensacion.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Confirmar un pedido son tres cosas: reservar el stock, cobrar el pago y avisar
+al almacén. Cada una vive en un servicio distinto, con su propia base de datos.
+
+En un monolito con una base relacional esto era una transacción: `BEGIN`, tres
+operaciones, `COMMIT`. Si algo fallaba, `ROLLBACK` y como si nada hubiera
+pasado.
+
+Aquí no existe ese `ROLLBACK`. **No hay transacción que abarque tres servicios**,
+así que si el pago falla después de reservar el stock, tienes veinte unidades
+apartadas para un pedido que no existe. Y si el aviso al almacén falla después
+de cobrar, has cobrado un envío que nadie va a preparar.
+
+Escribir esto a mano en una Lambda es donde empieza el verdadero problema. El
+código honesto tiene esta forma:
+
+```ts
+try {
+  await reservarStock(pedido);
+  try {
+    await cobrarPago(pedido);
+    try {
+      await confirmarEnvio(pedido);
+    } catch { await devolverCobro(pedido); await liberarStock(pedido); throw; }
+  } catch { await liberarStock(pedido); throw; }
+} catch { /* ¿y si liberarStock también falla? */ }
+```
+
+Tres problemas, y el tercero es el grave:
+
+- **Anidamiento que crece al cuadrado.** Cada paso nuevo duplica los caminos de
+  vuelta.
+- **Las compensaciones también fallan.** El `catch` que deshace puede reventar,
+  y no hay un `catch` del `catch` que sea sensato.
+- **Si el proceso muere, no queda nada.** El progreso vivía en la pila de una
+  función que ya no existe. Nadie sabe que hay stock reservado esperando a que
+  alguien lo libere.
+
+<Caja tipo="clave">
+Sin transacción distribuida, la única salida honesta es **deshacer con acciones
+de negocio**: no un `ROLLBACK`, sino un reembolso, una liberación, una
+cancelación. Eso es una saga. Lo que falta es alguien que se acuerde de por
+dónde iba.
+</Caja>
+
+## La solución
+
+Sacar el proceso del código y meterlo en una máquina de estados que **persiste
+entre pasos**.
+
+<SagaCompensacion />
+
+Cada paso es un estado con su `Retry` —cuántas veces, con qué backoff— y su
+`Catch`, que apunta al estado de compensación correspondiente. Las
+compensaciones se encadenan hacia atrás: si falla el envío, se devuelve el cobro
+y luego se libera el stock.
+
+Lo que cambia respecto al `try/catch` anidado no es la lógica, que es la misma.
+Es **dónde vive el progreso**. Step Functions guarda el estado fuera de tu
+código, así que:
+
+- Si una compensación falla, se reintenta sola, sin perder el contexto.
+- Si todo revienta, la ejecución queda **visible y parada** en el estado
+  concreto donde se rompió, con su entrada — no desaparecida.
+- Añadir un cuarto paso es añadir un estado y su compensación, no un nivel más
+  de anidamiento.
+
+### Por qué Standard y no Express
+
+Para una saga con pasos no idempotentes la elección está forzada, y AWS lo dice
+casi con estas palabras: Standard sigue un modelo de **exactamente-una-vez**, lo
+que lo hace adecuado para orquestar acciones **no idempotentes** como procesar
+pagos. Express es al-menos-una-vez.
+
+A eso se suma que Express **no soporta `.waitForTaskToken`**, así que cualquier
+saga con un paso que espera —una aprobación humana, la respuesta de un tercero—
+solo puede ser Standard.
+
+## Cuándo usarlo
+
+- Una operación de negocio **toca varios servicios** y dejarla a medias tiene
+  consecuencias visibles: dinero, stock, permisos.
+- Existe una **compensación de negocio real** para cada paso. Si no se puede
+  deshacer, no hay saga: hay que reordenar los pasos para que lo irreversible
+  vaya al final.
+- El proceso tiene **esperas largas** o pasos de aprobación humana.
+- Quieres **ver** dónde se rompió sin reconstruirlo a partir de logs.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Todo cabe en una base de datos.** Si los tres pasos escriben en la misma
+  tabla de DynamoDB, `TransactWriteItems` te da atomicidad de verdad — hasta
+  100 acciones — y no necesitas compensar nada.
+- **Ningún paso se puede deshacer.** Un email enviado no se desenvía. Si el
+  proceso es irreversible a mitad, la saga te da una ilusión de control:
+  rediseña el orden o acepta la inconsistencia explícitamente.
+- **No hay un director natural.** Si cada equipo es dueño de su paso y nadie
+  debe conocer el proceso entero, la orquestación centraliza conocimiento donde
+  no toca. Eso es coreografía.
+- **Alto volumen y milisegundos.** Cada transición cuesta latencia y dinero. Un
+  flujo de veinte estados a un millón de ejecuciones al mes son veinte millones
+  de transiciones facturadas.
+- **Son dos pasos.** Un `try/catch` con una compensación es perfectamente
+  legible. La saga empieza a pagar a partir del tercero.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Ordena los pasos poniendo lo irreversible al final.** Es la decisión que
+   más reduce el número de compensaciones que hay que escribir.
+2. **Escribe la compensación de cada paso antes que el paso.** Si no sabes
+   deshacerlo, todavía no sabes si puedes hacerlo.
+3. **`Retry` por tipo de error**: reintenta timeouts y throttling, nunca errores
+   de validación — reintentar un `400` es quemar dinero.
+4. **`Catch` hacia el estado de compensación** correspondiente, encadenando
+   hacia atrás.
+5. **Haz cada paso idempotente.** Los `Retry` hacen que se repita más, no menos.
+6. **Pasa referencias, no documentos**: 256 KiB entre estados.
+7. **Un estado final de fallo explícito** que registre el caso irrecuperable en
+   algún sitio que un humano mire.
+
+## El código
+
+```json
+{
+  "Comment": "Saga de confirmacion de pedido",
+  "StartAt": "ReservarStock",
+  "States": {
+    "ReservarStock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "reservarStock", "Payload.$": "$" },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.TooManyRequestsException", "States.Timeout"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "CobrarPago"
+    },
+
+    "CobrarPago": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "cobrarPago", "Payload.$": "$" },
+      "Retry": [
+        { "ErrorEquals": ["States.Timeout"], "MaxAttempts": 2, "BackoffRate": 2 }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "LiberarStock", "ResultPath": "$.error" }
+      ],
+      "Next": "ConfirmarEnvio"
+    },
+
+    "ConfirmarEnvio": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "confirmarEnvio", "Payload.$": "$" },
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "DevolverCobro", "ResultPath": "$.error" }
+      ],
+      "End": true
+    },
+
+    "DevolverCobro": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "devolverCobro", "Payload.$": "$" },
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "MaxAttempts": 5, "BackoffRate": 2 }],
+      "Next": "LiberarStock"
+    },
+
+    "LiberarStock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "liberarStock", "Payload.$": "$" },
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "MaxAttempts": 5, "BackoffRate": 2 }],
+      "Next": "PedidoFallido"
+    },
+
+    "PedidoFallido": { "Type": "Fail", "Error": "SagaCompensada" }
+  }
+}
+```
+
+Fíjate en que las compensaciones llevan `Retry` más agresivo que los pasos
+normales: **una compensación que falla deja el sistema inconsistente**, así que
+merece más insistencia que la operación original.
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · Una saga no es una transacción">
+Es la confusión de fondo y conviene decirla clara: entre el paso 2 y su
+compensación hay un intervalo —segundos, o minutos si hay reintentos— en el que
+**el sistema es visiblemente inconsistente**. El dinero está cobrado y el envío
+no existe.
+
+Nadie te da aislamiento: otro proceso puede leer ese estado intermedio y actuar
+sobre él. Si eso es inaceptable, no necesitas una saga: necesitas que esos datos
+vivan en el mismo almacén y usar una transacción de verdad.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · Los 256 KiB entre estados">
+La entrada y la salida de cada estado tienen un techo **duro** de 256 KiB en
+UTF-8. Y no es solo el resultado del paso: es todo lo que arrastras. Un
+`ResultPath` que va acumulando la salida de cada estado engorda el JSON en cada
+transición.
+
+El fallo llega a mitad del proceso, con la mitad de los efectos ya aplicados —
+que es exactamente el momento peor. Guarda en S3 o en DynamoDB y pasa la clave.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · El historial se llena y la ejecución falla">
+**25 000 eventos** por ejecución en Standard, y al alcanzarlos **la ejecución
+falla**. No avisa, no trunca: falla.
+
+Cada estado genera varios eventos, así que un bucle sobre dos mil elementos con
+tres estados por vuelta se acerca peligrosamente. Las sagas que iteran sobre
+colecciones son las que caen aquí. La salida es lanzar ejecuciones hijas —una
+por elemento— y que la saga padre solo coordine.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Reintentar lo que nunca va a funcionar">
+Un `Retry` con `States.ALL` sobre un paso que falla por validación reintenta
+cinco veces un error que es determinista. Se paga en transiciones, en
+invocaciones y en tiempo hasta llegar a la compensación.
+
+Separa siempre: `Retry` para lo transitorio —`States.Timeout`,
+`Lambda.TooManyRequestsException`— y `Catch` directo para lo demás.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Las compensaciones también necesitan idempotencia">
+`DevolverCobro` puede ejecutarse dos veces: porque su propio `Retry` disparó
+después de un timeout en el que la devolución sí se hizo, o porque alguien
+relanzó la ejecución. Devolver dos veces el mismo cobro es peor que el problema
+original.
+
+Toda la ficha de [idempotencia](/patrones/idempotencia-en-consumidores/) aplica
+aquí, y con más urgencia: en una saga los reintentos no son un accidente, son
+parte del diseño.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · El tipo de flujo es inmutable">
+Si empiezas con Express porque el proceso es corto y luego necesitas
+`.waitForTaskToken` para una aprobación humana, no puedes cambiar el tipo:
+Express no soporta callbacks y el tipo no se actualiza. Hay que crear otra
+máquina de estados y migrar todo lo que la invoca.
+
+Para una saga con pasos no idempotentes, empieza en Standard.
+</Caja>
+
+## Coste
+
+| Concepto | Efecto |
+| --- | --- |
+| Transiciones de estado (Standard) | ~25 USD / millón |
+| Invocaciones de Lambda | una por paso, y otra por compensación |
+| Esperar | **gratis** — un `Wait` cuesta una transición, no el tiempo |
+
+La cuenta que hay que hacer antes de elegir Standard: **cada paso completado es
+una transición facturada**. Una saga de seis estados que se ejecuta un millón de
+veces al mes son seis millones de transiciones. Si el proceso es de alto volumen
+y corta duración, mira si los pasos pueden hacerse idempotentes y usar Express.
+
+Lo que **no** cuesta es esperar. Un estado `Wait` de tres días para el plazo de
+devolución vale una transición, no tres días de cómputo. Comparado con mantener
+algo vivo, es gratis, y es la razón por la que los procesos con esperas largas
+acaban aquí.
+
+## Fuentes
+
+Semántica exactamente-una-vez de Standard frente a al-menos-una-vez de Express,
+inmutabilidad del tipo de flujo y patrones de integración no soportados en
+Express:
+[Choosing workflow type in Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html).
+Límite de 256 KiB de entrada y salida, límite de 25 000 eventos del historial y
+su comportamiento al alcanzarse, duraciones máximas y transiciones por región:
+[Step Functions service quotas](https://docs.aws.amazon.com/step-functions/latest/dg/limits-overview.html).
+Límites de `TransactWriteItems` como alternativa cuando todo cabe en DynamoDB:
+[Amazon DynamoDB Transactions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html).

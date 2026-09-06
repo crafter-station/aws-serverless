@@ -1,0 +1,37 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Marco from './Marco.astro';
+import Cruz from './Cruz.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const FILA1 = 96;
+const FILA2 = 252;
+---
+
+<Diagrama
+  ancho={700}
+  alto={392}
+  titulo="Una máquina de estados ejecuta tres pasos en orden: reservar stock, cobrar el pago y confirmar el envío. Si el tercero falla, un Catch salta a los estados de compensación, que deshacen el cobro y liberan el stock en orden inverso."
+  pie="<strong>Sin transacción distribuida, pero con un plan.</strong> Cada paso tiene su Catch y su compensación, declarados en la definición y no repartidos por cinco funciones. La máquina de estados recuerda por dónde iba, así que sabe exactamente qué hay que deshacer."
+>
+  <Marco x={16} y={44} ancho={664} alto={296} etiqueta="Step Functions · Standard" />
+
+  <Nodo x={70}  y={FILA1} titulo="Reservar stock" />
+  <Nodo x={280} y={FILA1} titulo="Cobrar pago" />
+  <Nodo x={490} y={FILA1} titulo="Confirmar envío" />
+
+  <Nodo x={70}  y={FILA2} titulo="Liberar stock" sub="compensación" />
+  <Nodo x={280} y={FILA2} titulo="Devolver cobro" sub="compensación" />
+
+  <Flecha de={[126, 122]} a={[278, 122]} />
+  <Flecha de={[336, 122]} a={[488, 122]} />
+
+  <Cruz x={542} y={100} />
+
+  <Flecha de={[510, 152]} a={[338, 250]} curva={10} etiqueta="Catch" ex={38} ey={14} tipo="fallo" />
+  <Flecha de={[278, 278]} a={[128, 278]} etiqueta="deshacer en orden inverso" ey={-10} tipo="fallo" />
+
+  <Etiqueta x={350} y={378} texto="Standard garantiza exactamente-una-vez: el cobro no se ejecuta dos veces por un reintento del flujo" />
+</Diagrama>
