@@ -100,6 +100,10 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
   documentación oficial de AWS, no contra blogs.
 - **Relaciones bidireccionales.** Si A dice que se combina con B, B menciona a A.
   El build detecta las huérfanas.
+- **Toda ficha de servicio lleva un diagrama en su modelo mental.** Los
+  patrones se explican con una historia; los servicios, con una imagen. Una
+  ficha de servicio sin diagrama se lee como documentación de referencia, que
+  es justo lo que este catálogo no quiere ser. El build lo exige.
 - **Ningún escalar de YAML sin comillas puede contener ": ".** Rompe el build
   con un "bad indentation" que no menciona la causa. Usa `>-` siempre que el
   texto lleve dos puntos seguidos de espacio.

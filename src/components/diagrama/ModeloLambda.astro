@@ -1,0 +1,35 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+// Escala: 1 unidad de concurrencia ≈ 1,9 px. El bote son 1 000 → 190 px… no cabe
+// con el detalle que interesa, así que la barra muestra 250 y el techo se marca.
+const X = 168;
+---
+
+<Diagrama
+  ancho={700}
+  alto={330}
+  titulo="El mismo tráfico de 100 peticiones por segundo consume 20 unidades de concurrencia cuando la función dura 200 milisegundos y 200 cuando dura 2 segundos. La duración multiplica la concurrencia sin que el tráfico cambie."
+  pie="<strong>Lambda no escala por peticiones por segundo: escala por concurrencia.</strong> Y la concurrencia es tráfico multiplicado por duración, así que una dependencia lenta te acerca al techo de la cuenta sin que llegue ni una petición más."
+>
+  <Etiqueta x={350} y={30} texto="concurrencia ≈ peticiones por segundo × duración en segundos" estilo="titulo" />
+
+  <Barra
+    x={X} y={90} titulo="100 pet/s · 200 ms"
+    sub="20 unidades de concurrencia · el 2 % del bote de la cuenta"
+    segmentos={[{ etiqueta: '20', ancho: 44, tono: 'handler' }]}
+  />
+
+  <Barra
+    x={X} y={192} titulo="100 pet/s · 2 s"
+    sub="200 unidades · el 20 % del bote, con el mismo tráfico"
+    segmentos={[{ etiqueta: '200', ancho: 440, tono: 'init' }]}
+  />
+
+  <Etiqueta x={162} y={112} texto="mismo tráfico" ancla="end" />
+  <Etiqueta x={162} y={214} texto="mismo tráfico" ancla="end" />
+
+  <Etiqueta x={350} y={314} texto="El bote son 1 000 concurrentes por región, compartidos entre todas tus funciones" estilo="peligro" />
+</Diagrama>

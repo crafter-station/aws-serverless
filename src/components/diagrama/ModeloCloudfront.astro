@@ -1,0 +1,39 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={392}
+  titulo="La misma ruta pedida por tres usuarios. Si la clave de caché incluye una cookie de sesión, cada usuario genera su propia copia y las tres peticiones van al origen. Si la clave es solo la ruta, la primera copia sirve a los tres."
+  pie="<strong>Cada cosa que metes en la clave multiplica las copias y divide tu tasa de acierto.</strong> Reenviar todas las cookies al origen no es una configuración conservadora: es desactivar la caché y pagar además un salto de red."
+>
+  <Etiqueta x={40} y={26} texto="Clave = ruta + cookie de sesión" estilo="peligro" ancla="start" />
+
+  <Nodo x={40}  y={48}  titulo="/foto.jpg" sub="sesión=a1" tam={26} />
+  <Nodo x={40}  y={110} titulo="/foto.jpg" sub="sesión=b2" tam={26} />
+  <Nodo x={40}  y={172} titulo="/foto.jpg" sub="sesión=c3" tam={26} />
+
+  <Nodo x={276} y={110} icono="amazon-cloud-front" titulo="3 copias distintas" sub="0 % de acierto" />
+
+  <Flecha de={[150, 62]}  a={[274, 122]} curva={-6} />
+  <Flecha de={[150, 124]} a={[274, 132]} />
+  <Flecha de={[150, 186]} a={[274, 142]} curva={6} />
+
+  <Nodo x={560} y={110} icono="amazon-simple-storage-service" titulo="origen" sub="3 peticiones" />
+  <Flecha de={[332, 136]} a={[558, 136]} tipo="fallo" etiqueta="las tres van al origen" ey={-11} />
+
+  <Etiqueta x={40} y={254} texto="Clave = solo la ruta" estilo="bien" ancla="start" />
+
+  <Nodo x={40}  y={274} titulo="/foto.jpg" sub="tres usuarios" tam={26} />
+  <Nodo x={276} y={274} icono="amazon-cloud-front" titulo="1 copia" sub="2 de 3 aciertos" />
+  <Nodo x={560} y={274} icono="amazon-simple-storage-service" titulo="origen" sub="1 petición" tenue />
+
+  <Flecha de={[150, 288]} a={[274, 300]} />
+  <Flecha de={[332, 300]} a={[558, 300]} etiqueta="solo la primera" ey={-11} />
+
+  <Etiqueta x={350} y={380} texto="La política de caché define la clave · la de origin request, lo que ve el origen sin crear variantes" />
+</Diagrama>

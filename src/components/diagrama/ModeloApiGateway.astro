@@ -1,0 +1,35 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const PASOS = ['autorizar', 'limitar', 'enrutar'];
+---
+
+<Diagrama
+  ancho={700}
+  alto={310}
+  titulo="Una petición del cliente atraviesa API Gateway, que la autoriza, la cuenta contra los límites y la enruta hacia la integración. API Gateway no ejecuta código de negocio: entrega la petición a otro."
+  pie="<strong>Un portero, no un servidor.</strong> Autoriza, limita, transforma y enruta — y no hace nada más. Todo lo que ejecuta tu lógica está detrás, y el cronómetro de 29 segundos corre desde que entra la petición."
+>
+  <Nodo x={30} y={128} titulo="cliente" />
+
+  <Marco x={130} y={64} ancho={396} alto={172} etiqueta="API Gateway · el portero" />
+
+  {PASOS.map((p, i) => (
+    <Fragment>
+      <Nodo x={166 + i * 130} y={128} titulo={p} tam={44} />
+      {i > 0 && <Flecha de={[214 + (i - 1) * 130, 150]} a={[164 + i * 130, 150]} />}
+    </Fragment>
+  ))}
+
+  <Nodo x={588} y={128} icono="aws-lambda" titulo="tu código" />
+
+  <Flecha de={[84, 154]}  a={[164, 150]} />
+  <Flecha de={[470, 150]} a={[586, 154]} />
+
+  <Etiqueta x={350} y={272} texto="Cronómetro de 29 s desde el primer byte · el throttle es de la cuenta, no de esta API" estilo="peligro" />
+  <Etiqueta x={350} y={294} texto="REST API y HTTP API hacen esto mismo con precios que se diferencian en 3,5×" />
+</Diagrama>

@@ -102,12 +102,16 @@ limites:
       aquí. GetFunction va aparte, a 100/s.
 ---
 
+import ModeloLambda from '../../components/diagrama/ModeloLambda.astro';
+
 ## Modelo mental
 
 La pregunta con la que casi todo el mundo llega a Lambda es *"¿cuántas
 peticiones por segundo aguanta?"*, y esa pregunta no tiene respuesta, porque
 **Lambda no escala por peticiones por segundo**. Escala por concurrencia:
 cuántas invocaciones hay en vuelo simultáneamente.
+
+<ModeloLambda />
 
 La conversión es una multiplicación y conviene tenerla en los dedos:
 

@@ -78,11 +78,15 @@ limites:
     tipo: hard
 ---
 
+import ModeloSqs from '../../components/diagrama/ModeloSqs.astro';
+
 ## Modelo mental
 
 Si SNS es un altavoz, SQS es **un buzón**. Guarda lo que le echas hasta que
 alguien viene a recogerlo, y el backlog no tiene techo: puedes acumular millones
 de mensajes sin que la cola se inmute.
+
+<ModeloSqs />
 
 Pero tiene una regla que descoloca a todo el mundo la primera vez:
 

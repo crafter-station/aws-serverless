@@ -1,0 +1,43 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={396}
+  titulo="Comparación de dos formas de desacoplar. Con un topic de SNS el productor elige el canal, así que el acoplamiento se muda al nombre del topic. Con un bus de EventBridge el productor publica en un solo sitio y es cada regla la que declara qué le interesa."
+  pie="<strong>El acoplamiento no desaparece con un topic: se muda al nombre del topic.</strong> Por eso los sistemas con SNS acaban con veinte canales y una convención que nadie recuerda. En un bus, el productor publica y es el consumidor quien declara."
+>
+  <Etiqueta x={40} y={24} texto="Con topics: el productor elige el canal" estilo="peligro" ancla="start" />
+
+  <Nodo x={40}  y={44} icono="aws-lambda" titulo="productor" tam={44} />
+  <Nodo x={230} y={38} icono="amazon-simple-notification-service" titulo="pedidos-es" tam={40} />
+  <Nodo x={230} y={98} icono="amazon-simple-notification-service" titulo="pedidos-grandes" tam={40} />
+
+  <Flecha de={[86, 60]} a={[228, 58]} tipo="evento" />
+  <Flecha de={[86, 72]} a={[228, 118]} tipo="evento" />
+
+  <Etiqueta x={470} y={62}  texto="cada criterio nuevo" ancla="start" />
+  <Etiqueta x={470} y={80}  texto="es un topic nuevo" ancla="start" />
+  <Etiqueta x={470} y={104} texto="y un cambio en el productor" ancla="start" estilo="peligro" />
+
+  <Etiqueta x={40} y={190} texto="Con un bus: el consumidor declara" estilo="bien" ancla="start" />
+
+  <Nodo x={40}  y={210} icono="aws-lambda" titulo="productor" tam={44} />
+  <Nodo x={210} y={210} icono="amazon-event-bridge" titulo="bus" tam={44} />
+
+  <Nodo x={390} y={196} titulo="regla" sub="pais = ES" tam={40} />
+  <Nodo x={390} y={266} titulo="regla" sub="importe > 500" tam={40} />
+
+  <Flecha de={[86, 232]}  a={[208, 232]} tipo="evento" etiqueta="un solo destino" ey={-11} />
+  <Flecha de={[256, 226]} a={[388, 216]} />
+  <Flecha de={[256, 238]} a={[388, 286]} />
+
+  <Etiqueta x={470} y={228} texto="añadir una regla no toca" ancla="start" />
+  <Etiqueta x={470} y={246} texto="nada de lo que ya existe" ancla="start" estilo="bien" />
+
+  <Etiqueta x={350} y={384} texto="Se paga con menos throughput, más latencia y un tope duro de 5 destinos por regla" />
+</Diagrama>

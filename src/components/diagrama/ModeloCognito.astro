@@ -1,0 +1,36 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={356}
+  titulo="Los dos productos de Cognito. Un user pool valida al usuario y emite un token JWT que tu API verifica. Un identity pool cambia esa identidad por credenciales temporales de AWS para que el cliente hable directamente con S3 o DynamoDB."
+  pie="<strong>Dos productos con un nombre.</strong> La mayoría de las aplicaciones solo necesita el user pool: el usuario recibe un JWT y tu API lo valida. El identity pool reparte credenciales de AWS al navegador, y eso es una superficie que casi nadie quiere gestionar."
+>
+  <Etiqueta x={40} y={26} texto="User pool: un directorio que emite tokens" estilo="bien" ancla="start" />
+
+  <Nodo x={40}  y={48} titulo="usuario" tam={40} />
+  <Nodo x={210} y={48} icono="amazon-cognito" titulo="user pool" tam={40} />
+  <Nodo x={396} y={48} icono="amazon-api-gateway" titulo="tu API" tam={40} />
+  <Nodo x={566} y={48} icono="aws-lambda" titulo="tu código" tam={40} />
+
+  <Flecha de={[84, 68]}  a={[208, 68]} etiqueta="usuario y clave" ey={-11} />
+  <Flecha de={[254, 68]} a={[394, 68]} tipo="evento" etiqueta="JWT" ey={-11} />
+  <Flecha de={[440, 68]} a={[564, 68]} etiqueta="verifica la firma" ey={-11} />
+
+  <Etiqueta x={40} y={196} texto="Identity pool: credenciales de AWS en el cliente" estilo="peligro" ancla="start" />
+
+  <Nodo x={40}  y={218} titulo="usuario" tam={40} />
+  <Nodo x={210} y={218} icono="amazon-cognito" titulo="identity pool" tam={40} />
+  <Nodo x={470} y={218} icono="amazon-dynamo-db" titulo="DynamoDB" tam={40} />
+
+  <Flecha de={[84, 238]}  a={[208, 238]} etiqueta="identidad" ey={-11} />
+  <Flecha de={[254, 238]} a={[468, 238]} tipo="fallo" etiqueta="credenciales temporales de AWS" ey={-11} ex={-40} />
+
+  <Etiqueta x={350} y={300} texto="El cliente firma peticiones a AWS por su cuenta — una superficie que casi nadie quiere gestionar" estilo="peligro" />
+  <Etiqueta x={350} y={330} texto="Se factura por usuario activo mensual, no por peticiones · la factura crece con tu producto, no con tu tráfico" />
+</Diagrama>

@@ -1,0 +1,47 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Cruz from './Cruz.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={370}
+  titulo="Comparación de dos formas de coordinar tres pasos. Dentro de una función Lambda el progreso vive en su pila y desaparece si el proceso muere. En una máquina de estados el progreso se guarda entre transiciones, así que la ejecución queda parada y visible en el paso concreto que falló."
+  pie="<strong>Lo que compras es memoria, no orquestación.</strong> Cualquiera puede llamar a tres cosas en orden; lo que no puede es acordarse de por dónde iba cuando el proceso muere. Step Functions guarda el estado fuera de tu código y te lo dibuja."
+>
+  <Etiqueta x={40} y={24} texto="En una función: el progreso vive en la pila" estilo="peligro" ancla="start" />
+
+  <Nodo x={64}  y={48} titulo="paso 1" tam={40} />
+  <Nodo x={224} y={48} titulo="paso 2" tam={40} />
+  <Nodo x={384} y={48} titulo="paso 3" tam={40} />
+
+  <Flecha de={[108, 68]} a={[222, 68]} />
+  <Flecha de={[268, 68]} a={[382, 68]} tipo="fallo" />
+  <Cruz x={424} y={52} />
+
+  <Etiqueta x={470} y={64}  texto="la función muere" ancla="start" estilo="peligro" />
+  <Etiqueta x={470} y={82}  texto="y con ella el progreso:" ancla="start" />
+  <Etiqueta x={470} y={100} texto="nadie sabe qué se hizo" ancla="start" />
+
+  <Etiqueta x={40} y={190} texto="En una máquina de estados: el progreso se guarda" estilo="bien" ancla="start" />
+
+  <Marco x={44} y={208} ancho={400} alto={110} etiqueta="Estado persistido entre transiciones" tono="bien" />
+
+  <Nodo x={64}  y={232} titulo="paso 1" tam={40} />
+  <Nodo x={224} y={232} titulo="paso 2" tam={40} />
+  <Nodo x={384} y={232} titulo="paso 3" tam={40} />
+
+  <Flecha de={[108, 252]} a={[222, 252]} />
+  <Flecha de={[268, 252]} a={[382, 252]} tipo="fallo" />
+  <Cruz x={424} y={236} />
+
+  <Etiqueta x={470} y={248} texto="la ejecución queda parada" ancla="start" estilo="bien" />
+  <Etiqueta x={470} y={266} texto="aquí, con su entrada," ancla="start" />
+  <Etiqueta x={470} y={284} texto="hasta un año" ancla="start" />
+
+  <Etiqueta x={350} y={356} texto="Y esperar es gratis: un estado Wait de tres días cuesta una transición, no tres días de cómputo" />
+</Diagrama>

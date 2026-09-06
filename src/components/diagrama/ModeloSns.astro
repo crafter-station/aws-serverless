@@ -1,0 +1,36 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const FILAS = [40, 150, 260];
+---
+
+<Diagrama
+  ancho={700}
+  alto={370}
+  titulo="Un productor publica en un topic de SNS y el topic entrega una copia a cada una de sus tres suscripciones. El topic no almacena nada: si no hubiera suscripciones, el mensaje se perdería sin error."
+  pie="<strong>Un altavoz, no un buzón.</strong> SNS no tiene profundidad, ni retención, ni forma de leer lo anterior. Reparte una copia a quien esté escuchando en ese instante y se olvida."
+>
+  <Nodo x={40}  y={150} icono="aws-lambda" titulo="productor" />
+  <Nodo x={220} y={150} icono="amazon-simple-notification-service" titulo="topic" sub="no guarda nada" />
+
+  <Flecha de={[94, 176]} a={[218, 176]} etiqueta="Publish" ey={-11} />
+
+  {FILAS.map((y, i) => (
+    <Fragment>
+      <Nodo x={480} y={y} icono="amazon-simple-queue-service" titulo={`suscripción ${i + 1}`} />
+      <Flecha
+        de={[276, 176 + (i - 1) * 6]}
+        a={[478, y + 26]}
+        curva={(i - 1) * 12}
+        tipo="evento"
+        etiqueta={i === 1 ? 'una copia a cada una' : undefined}
+        ey={-11}
+      />
+    </Fragment>
+  ))}
+
+  <Etiqueta x={350} y={356} texto="Si nadie está suscrito, Publish devuelve 200 y el mensaje se evapora sin error" estilo="peligro" />
+</Diagrama>

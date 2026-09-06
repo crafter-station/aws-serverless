@@ -1,0 +1,33 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const X = 130;
+const ANCHO = 44;
+---
+
+<Diagrama
+  ancho={700}
+  alto={356}
+  titulo="Un stream con diez registros y dos consumidores independientes leyendo a distinta altura. Ninguno borra nada: cada uno lleva su propia posición sobre el mismo stream, y los registros siguen ahí hasta que caducan."
+  pie="<strong>Leer no borra: cada consumidor lleva su posición.</strong> Es la diferencia de fondo con una cola. Por eso pueden convivir varios consumidores sin coordinarse, y por eso volver atrás y reprocesar es mover un puntero en vez de un proyecto."
+>
+  <Barra
+    x={X} y={64} titulo="El stream"
+    segmentos={Array.from({ length: 10 }, (_, i) => ({
+      etiqueta: `${i + 1}`, ancho: ANCHO, tono: 'arranque' as const,
+    }))}
+  />
+
+  <Nodo x={188} y={196} icono="aws-lambda" titulo="consumidor A" sub="va por el 3" />
+  <Nodo x={452} y={196} icono="aws-lambda" titulo="consumidor B" sub="va por el 9" />
+
+  <Flecha de={[214, 194]} a={[236, 100]} tipo="evento" />
+  <Flecha de={[478, 194]} a={[500, 100]} tipo="evento" />
+
+  <Etiqueta x={350} y={302} texto="Los dos leen los mismos registros · nadie consume nada · se quedan de 24 h a 365 días" />
+  <Etiqueta x={350} y={330} texto="Un shard da 2 MB/s de lectura REPARTIDOS entre los consumidores estándar" estilo="peligro" />
+</Diagrama>

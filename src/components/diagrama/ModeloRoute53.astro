@@ -1,0 +1,31 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Cruz from './Cruz.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={384}
+  titulo="La primera consulta del cliente llega hasta Route 53 y la respuesta se guarda en la caché del resolver durante el TTL. Las consultas siguientes se responden desde esa caché sin llegar a Route 53, así que un cambio en la zona no se ve hasta que el TTL caduca."
+  pie="<strong>La respuesta la cachean otros, y nadie puede purgarla.</strong> Ni Route 53 ni tú. Por eso un cambio de DNS nunca es instantáneo y el TTL es una decisión de arquitectura: alto significa menos consultas y menos factura, pero también un failover lento."
+>
+  <Nodo x={40}  y={112} titulo="cliente" />
+  <Nodo x={252} y={112} titulo="resolver" sub="del operador" />
+  <Nodo x={492} y={112} icono="amazon-route-53" titulo="Route 53" sub="tu zona" />
+
+  <Flecha de={[94, 128]}  a={[250, 128]} etiqueta="1 · primera consulta" ey={-11} />
+  <Flecha de={[306, 128]} a={[490, 128]} etiqueta="llega hasta aquí" ey={-11} />
+
+  <Flecha de={[490, 152]} a={[308, 152]} curva={-16} tipo="evento" etiqueta="respuesta + TTL" ey={30} />
+  <Flecha de={[250, 176]} a={[96, 176]} curva={-16} tipo="evento" ey={30} />
+
+  <Flecha de={[94, 254]}  a={[250, 254]} etiqueta="2 · consultas siguientes" ey={-11} />
+  <Flecha de={[306, 254]} a={[488, 254]} tipo="fallo" etiqueta="ya no llegan" ey={-11} />
+  <Cruz x={400} y={254} />
+
+  <Etiqueta x={350} y={324} texto="Durante el TTL, el resolver responde solo · Route 53 ni se entera de que hubo consulta" />
+  <Etiqueta x={350} y={352} texto="Baja el TTL DÍAS antes de una migración, no el mismo día" estilo="peligro" />
+</Diagrama>

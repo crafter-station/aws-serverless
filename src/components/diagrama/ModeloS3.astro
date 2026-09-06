@@ -1,0 +1,45 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+
+/*
+  Las claves se dibujan como TEXTO y no como cajas, porque eso es exactamente
+  lo que son: cadenas. Meterlas en un rectángulo insinuaría una carpeta.
+*/
+const CLAVES_MISMO = ['subidas/2026-09-06/a.pdf', 'subidas/2026-09-06/b.pdf', 'subidas/2026-09-06/c.pdf'];
+const CLAVES_REPARTIDAS = ['subidas/a1f2/a.pdf', 'subidas/7c40/b.pdf', 'subidas/e903/c.pdf'];
+const PREFIJOS = ['prefijo a1f2', 'prefijo 7c40', 'prefijo e903'];
+---
+
+<Diagrama
+  ancho={700}
+  alto={420}
+  titulo="Dos formas de nombrar las claves. Si las tres empiezan por la fecha caen en el mismo prefijo y comparten un techo de 3 500 escrituras por segundo. Si empiezan por un identificador repartido, cada una cae en un prefijo distinto, y cada prefijo tiene su propio techo."
+  pie="<strong>No hay carpetas: la clave es una cadena, y su prefijo es tu plan de capacidad.</strong> Cada prefijo particionado sostiene 3 500 escrituras y 5 500 lecturas por segundo, y no hay límite en el número de prefijos. El rendimiento de S3 no se pide: se diseña nombrando."
+>
+  <Etiqueta x={40} y={26} texto="Prefijo temporal: todo el día en el mismo sitio" estilo="peligro" ancla="start" />
+
+  {CLAVES_MISMO.map((c, i) => (
+    <Etiqueta x={40} y={64 + i * 30} texto={c} ancla="start" />
+  ))}
+
+  <Nodo x={430} y={70} icono="amazon-simple-storage-service" titulo="un solo prefijo" sub="3 500 escr/s entre las tres" />
+
+  <Flecha de={[230, 60]}  a={[428, 88]}  curva={-6} />
+  <Flecha de={[230, 90]}  a={[428, 96]} />
+  <Flecha de={[230, 120]} a={[428, 104]} curva={6} />
+
+  <Etiqueta x={40} y={244} texto="Prefijo repartido: cada uno con su techo" estilo="bien" ancla="start" />
+
+  {CLAVES_REPARTIDAS.map((c, i) => (
+    <Fragment>
+      <Etiqueta x={40} y={282 + i * 44} texto={c} ancla="start" />
+      <Nodo x={430} y={264 + i * 44} titulo={PREFIJOS[i]} tam={26} />
+      <Flecha de={[230, 278 + i * 44]} a={[428, 277 + i * 44]} />
+    </Fragment>
+  ))}
+
+  <Etiqueta x={350} y={408} texto="3 500 escr/s cada uno · sin límite en el número de prefijos · renombrar una carpeta no existe" />
+</Diagrama>

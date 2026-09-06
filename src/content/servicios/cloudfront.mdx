@@ -98,6 +98,7 @@ limites:
     tipo: hard
 ---
 
+import ModeloCloudfront from '../../components/diagrama/ModeloCloudfront.astro';
 import Caja from '../../components/Caja.astro';
 
 ## Modelo mental
@@ -105,6 +106,8 @@ import Caja from '../../components/Caja.astro';
 CloudFront es **una caché con cientos de sedes**. Un usuario de Lima pide un
 archivo, la sede más cercana mira si lo tiene, y si lo tiene se lo da sin que tu
 origen se entere de que ha existido esa petición.
+
+<ModeloCloudfront />
 
 Todo el servicio se reduce a esa pregunta —*¿lo tengo?*— y la respuesta la
 decide **la clave de caché**.

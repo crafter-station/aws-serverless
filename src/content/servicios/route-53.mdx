@@ -77,6 +77,7 @@ limites:
       se firman contra us-east-1 aunque tus recursos estén en otra región.
 ---
 
+import ModeloRoute53 from '../../components/diagrama/ModeloRoute53.astro';
 import Caja from '../../components/Caja.astro';
 
 ## Modelo mental
@@ -85,6 +86,8 @@ Route 53 es **DNS gestionado con opiniones**. La parte de DNS es la de siempre:
 alguien pregunta por un nombre y el servicio devuelve un registro. Lo que añade
 AWS es *quién* recibe qué respuesta, y qué pasa cuando un destino deja de
 funcionar.
+
+<ModeloRoute53 />
 
 Y hay una propiedad del DNS que conviene tener presente antes que cualquier
 límite: **la respuesta la cachean otros**. El resolver del operador, el sistema

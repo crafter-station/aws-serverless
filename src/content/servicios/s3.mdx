@@ -82,10 +82,14 @@ limites:
     nota: Para objetos pequeños, o primer byte en objetos grandes. No es una base de datos.
 ---
 
+import ModeloS3 from '../../components/diagrama/ModeloS3.astro';
+
 ## Modelo mental
 
 S3 es **una tabla hash gigante de cadena a bytes**. La clave es el nombre
 completo del objeto, el valor son sus bytes, y no hay nada más.
+
+<ModeloS3 />
 
 Todo lo que sorprende de S3 sale de tomarse esa frase en serio:
 

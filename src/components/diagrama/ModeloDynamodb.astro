@@ -1,0 +1,39 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+
+// Dentro del marco, que va de y=24 a y=310. Antes estaban en 540 y la
+// tercera se salía del lienzo.
+const PARTICIONES = [40, 130, 220];
+---
+
+<Diagrama
+  ancho={700}
+  alto={356}
+  titulo="Tres claves de partición distintas pasan por una función hash que decide en qué partición física se guarda cada elemento. Los elementos con la misma clave caen siempre en la misma partición y comparten su techo de capacidad."
+  pie="<strong>La partition key es una dirección física.</strong> De ahí sale lo bueno —leer por clave va directo a una partición, da igual el tamaño de la tabla— y lo malo: todo lo que comparte clave comparte también el techo de 3 000 lecturas y 1 000 escrituras por segundo."
+>
+  <Nodo x={40}  y={40}  titulo="CLIENTE#42" tam={44} />
+  <Nodo x={40}  y={140} titulo="CLIENTE#77" tam={44} />
+  <Nodo x={40}  y={240} titulo="CLIENTE#42" sub="otro elemento" tam={44} />
+
+  <Nodo x={240} y={140} icono="amazon-dynamo-db" titulo="hash" sub="función interna" />
+
+  <Flecha de={[88, 62]}  a={[238, 152]} curva={-10} />
+  <Flecha de={[88, 162]} a={[238, 166]} />
+  <Flecha de={[88, 262]} a={[238, 180]} curva={10} />
+
+  <Marco x={456} y={24} ancho={224} alto={286} etiqueta="Particiones físicas" />
+
+  {PARTICIONES.map((y, i) => (
+    <Nodo x={520} y={y} titulo={`partición ${i + 1}`} sub={i === 0 ? '3 000 lect/s · 1 000 escr/s' : undefined} tam={44} />
+  ))}
+
+  <Flecha de={[294, 156]} a={[518, 62]}  curva={-10} etiqueta="las dos del 42" ex={-10} ey={-11} />
+  <Flecha de={[294, 176]} a={[518, 242]} curva={12} etiqueta="la del 77" ex={-10} ey={22} />
+
+  <Etiqueta x={350} y={344} texto="Mismo valor de clave, misma partición · el techo no se amplía, se esquiva repartiendo" estilo="peligro" />
+</Diagrama>

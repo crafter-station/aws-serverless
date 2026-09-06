@@ -1,0 +1,41 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const X = 194;
+const TOTAL = 456;
+
+// La misma ventana de tiempo, cada vez con menos trozos: eso es perder detalle.
+const trozos = (n: number, tono: 'handler' | 'init' | 'arranque') =>
+  Array.from({ length: n }, () => ({ etiqueta: '', ancho: TOTAL / n, tono }));
+---
+
+<Diagrama
+  ancho={700}
+  alto={330}
+  titulo="La misma ventana de tiempo representada con tres granularidades decrecientes. Durante los primeros quince días el dato se lee minuto a minuto; entre quince y sesenta y tres días solo agregado a cinco minutos; a partir de ahí, a una hora."
+  pie="<strong>Las métricas no caducan: se agregan.</strong> El dato sigue ahí, pero cada vez con menos detalle. El pico de treinta segundos que causó el incidente del trimestre pasado ya no existe: existe la media de su hora, que no dice nada."
+>
+  <Barra
+    x={X} y={62} titulo="Primeros 15 días"
+    sub="Resolución de 1 minuto: se ve el pico"
+    segmentos={trozos(24, 'handler')}
+  />
+
+  <Barra
+    x={X} y={158} titulo="De 15 a 63 días"
+    sub="Solo agregado a 5 minutos"
+    segmentos={trozos(6, 'init')}
+  />
+
+  <Barra
+    x={X} y={254} titulo="De 63 a 455 días"
+    sub="Solo agregado a 1 hora"
+    segmentos={trozos(2, 'arranque')}
+  />
+
+  <Etiqueta x={188} y={84}  texto="misma ventana" ancla="end" />
+  <Etiqueta x={188} y={180} texto="misma ventana" ancla="end" />
+  <Etiqueta x={188} y={276} texto="misma ventana" ancla="end" />
+</Diagrama>

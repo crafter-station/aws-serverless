@@ -93,6 +93,7 @@ limites:
     nota: Es la causa habitual del ExpiredIteratorException en consumidores lentos.
 ---
 
+import ModeloKinesis from '../../components/diagrama/ModeloKinesis.astro';
 import Caja from '../../components/Caja.astro';
 
 ## Modelo mental
@@ -100,6 +101,8 @@ import Caja from '../../components/Caja.astro';
 Si SQS es un buzón y SNS un altavoz, Kinesis es **un cuaderno**. Los registros se
 escriben en orden, se quedan escritos, y cualquiera puede volver atrás y releer
 desde donde quiera.
+
+<ModeloKinesis />
 
 Esa es la diferencia de fondo con una cola, y de ella salen todas las demás:
 

@@ -92,11 +92,15 @@ limites:
     tipo: soft
 ---
 
+import ModeloDynamodb from '../../components/diagrama/ModeloDynamodb.astro';
+
 ## Modelo mental
 
 DynamoDB no es "una base de datos NoSQL". Es una **tabla hash distribuida con
 persistencia**, y todo lo que te sorprenda de ella se explica volviendo a esa
 frase.
+
+<ModeloDynamodb />
 
 Cuando escribes un elemento, DynamoDB pasa su partition key por una función
 hash y el resultado decide **en qué partición física** se guarda. Esa es la

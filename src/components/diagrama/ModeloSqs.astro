@@ -1,0 +1,37 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const X = 190;
+---
+
+<Diagrama
+  ancho={700}
+  alto={318}
+  titulo="Dos líneas de tiempo de un mismo mensaje. En la primera el consumidor lo borra antes de que expire el visibility timeout y el mensaje desaparece. En la segunda tarda de más, el timeout expira y el mensaje reaparece en la cola mientras el primer consumidor sigue trabajando."
+  pie="<strong>Recibir no borra: esconde.</strong> El visibility timeout es el plazo que tienes para llamar a <code>DeleteMessage</code>. Si se agota, el mensaje vuelve — aunque tu función siga procesándolo, y entonces hay dos."
+>
+  <Barra
+    x={X} y={54} titulo="El consumidor llega a tiempo"
+    sub="ReceiveMessage · procesa · DeleteMessage. El mensaje desaparece."
+    segmentos={[
+      { etiqueta: 'oculto · visibility timeout', ancho: 260, tono: 'espera' },
+      { etiqueta: 'borrado', ancho: 96, tono: 'handler' },
+    ]}
+  />
+
+  <Barra
+    x={X} y={166} titulo="El consumidor tarda de más"
+    sub="El timeout expira y el mensaje vuelve a estar visible. Ahora hay dos consumidores con él."
+    segmentos={[
+      { etiqueta: 'oculto', ancho: 190, tono: 'espera' },
+      { etiqueta: 'visible otra vez', ancho: 166, tono: 'fallo' },
+    ]}
+  />
+
+  <Etiqueta x={184} y={76} texto="mensaje" ancla="end" />
+  <Etiqueta x={184} y={188} texto="mensaje" ancla="end" />
+
+  <Etiqueta x={350} y={302} texto="Por eso el visibility timeout va cómodamente por encima del timeout de la función, no ajustado" />
+</Diagrama>

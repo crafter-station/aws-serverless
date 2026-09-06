@@ -103,12 +103,16 @@ limites:
     nota: Los pipelines que despliegan muchas APIs en paralelo se estrangulan aquí.
 ---
 
+import ModeloApiGateway from '../../components/diagrama/ModeloApiGateway.astro';
+
 ## Modelo mental
 
 API Gateway es **un portero, no un servidor**. No ejecuta tu código: recibe la
 petición, decide si pasa, la cuenta, y se la entrega a otro. Todo lo que hace
 cabe en cuatro verbos —autorizar, limitar, transformar, enrutar— y todo lo que
 te va a doler viene de olvidar el quinto que no hace: **esperar mucho rato**.
+
+<ModeloApiGateway />
 
 ### Dos productos, un nombre
 

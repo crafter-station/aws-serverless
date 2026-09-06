@@ -79,7 +79,20 @@ export async function verificarCatalogo(): Promise<void> {
   }
 
   /*
-    2. Relaciones huérfanas.
+    2. Toda ficha de servicio "lista" lleva un diagrama en su modelo mental.
+
+    Los patrones se explican con una historia; los servicios, con una imagen del
+    modelo mental. Una ficha de servicio sin diagrama se lee como documentación
+    de referencia, que es justo lo que este catálogo no quiere ser.
+  */
+  for (const s of listos.servicios) {
+    if (!/components\/diagrama\//.test(s.body ?? '')) {
+      fallos.push(`servicios/${s.id}: no tiene diagrama de modelo mental`);
+    }
+  }
+
+  /*
+    3. Relaciones huérfanas.
 
     Si A dice que se combina con B, B tiene que mencionar a A. Solo se exige
     entre dos patrones "listos": un esbozo todavía no tiene frontmatter que
@@ -101,7 +114,7 @@ export async function verificarCatalogo(): Promise<void> {
     }
   }
 
-  // 3. Un patrón no puede relacionarse consigo mismo.
+  // 4. Un patrón no puede relacionarse consigo mismo.
   for (const p of listos.patrones) {
     if ((p.data.relacionados ?? []).some((r) => r.patron.id === p.id)) {
       fallos.push(`patrones/${p.id} se relaciona consigo mismo`);

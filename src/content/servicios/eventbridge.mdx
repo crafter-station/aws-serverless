@@ -87,10 +87,14 @@ limites:
     tipo: hard
 ---
 
+import ModeloEventbridge from '../../components/diagrama/ModeloEventbridge.astro';
+
 ## Modelo mental
 
 SNS y EventBridge resuelven el mismo problema —un productor, varios consumidores
 que no se conocen— y lo resuelven al revés el uno del otro.
+
+<ModeloEventbridge />
 
 En **SNS** el productor elige el canal: publica en el topic `pedidos` y quien
 esté suscrito a `pedidos` lo recibe todo. El acoplamiento no ha desaparecido, se

@@ -106,12 +106,15 @@ limites:
     tipo: hard
 ---
 
+import ModeloCloudwatch from '../../components/diagrama/ModeloCloudwatch.astro';
 import Caja from '../../components/Caja.astro';
 
 ## Modelo mental
 
 CloudWatch no es un producto: son **dos servicios distintos con el mismo
 nombre**, y casi todos los problemas vienen de tratarlos como uno.
+
+<ModeloCloudwatch />
 
 **Métricas** es una serie temporal: publicas números, se agregan por periodos y
 se leen como estadísticas. **Logs** es un almacén de texto: ingieres líneas, se

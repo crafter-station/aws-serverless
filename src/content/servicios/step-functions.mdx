@@ -90,9 +90,13 @@ limites:
     tipo: hard
 ---
 
+import ModeloStepFunctions from '../../components/diagrama/ModeloStepFunctions.astro';
+
 ## Modelo mental
 
 Step Functions es **una máquina de estados que se acuerda de dónde va**.
+
+<ModeloStepFunctions />
 
 Esa memoria es todo el producto. Una función Lambda que orquesta cinco pasos
 tiene que mantener el progreso en algún sitio, capturar los fallos de cada paso,
