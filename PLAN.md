@@ -148,6 +148,28 @@ Los checks de `src/lib/coherencia.ts` se probaron en negativo (rompiendo una
 ficha a propósito) antes de darlos por buenos. Un check que nunca dispara es
 peor que ningún check.
 
+### Audio y versión en texto
+
+Cada ficha se sirve también como markdown en `/<coleccion>/<slug>.md`, y lleva
+un botón que se la copia entera. La conversión sale del MDX, no del HTML.
+
+El botón **Escuchar** reproduce una narración y resalta la palabra que suena.
+El audio se genera **a mano**, no en cada build:
+
+    OPENAI_API_KEY=... node scripts/generar-audio.mjs [slug ...]
+
+La clave nunca se escribe en el repo — es público. Los tiempos por palabra no
+los da la API de voz: se sintetiza por trozos, se transcribe cada trozo con
+Whisper pidiendo marcas por palabra y se alinea contra el texto original.
+
+`src/lib/lectura.js` es el punto delicado: lo usan el script (sobre el HTML
+construido) y el navegador (sobre el DOM vivo), y **tienen que dar la misma
+lista de palabras**. El reproductor las compara antes de encender el resaltado;
+si no cuadran, suena sin resaltar en vez de señalar la palabra equivocada.
+
+Al cambiar el texto de una ficha hay que regenerar su audio. El script salta
+las que ya están al día, así que reanudar un lote es barato.
+
 ### Despliegue
 
 Compose en Dokploy (`crafter-station/aws-serverless` → `docker-compose.yaml` →

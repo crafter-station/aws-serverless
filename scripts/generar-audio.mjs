@@ -218,11 +218,14 @@ async function generar(coleccion, slug) {
     rehacer. Sin esto, reanudar un lote interrumpido cuesta lo mismo que
     empezarlo.
   */
-  const yaHecho = join(SALIDA, coleccion, );
-  if (existsSync(yaHecho) && existsSync(join(SALIDA, coleccion, ))) {
+  const yaHecho = join(SALIDA, coleccion, `${slug}.json`);
+  if (existsSync(yaHecho) && existsSync(join(SALIDA, coleccion, `${slug}.mp3`))) {
     const previo = JSON.parse(await readFile(yaHecho, 'utf8'));
-    if (previo.palabras.length === palabras.length && previo.palabras.every((p, i) => p === palabras[i])) {
-      console.log();
+    if (
+      previo.palabras.length === palabras.length &&
+      previo.palabras.every((p, i) => p === palabras[i])
+    ) {
+      console.log(`  ${slug}: ya estaba al día, se salta.`);
       return null;
     }
   }
