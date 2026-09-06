@@ -111,8 +111,8 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
 - [x] 2. Ficha **fan-out** completa: prosa, 2 diagramas, 6 primitivas visuales
 - [x] 3. Extraer el sistema: esquemas Zod, plantillas, checks de build
 - [x] 4. Desplegar en [`aws.crafter.run`](https://aws.crafter.run)
-- [ ] 5. Llenar: 6 servicios + 7 patrones restantes
-- [ ] 6. Umbral de mostrar: 4 servicios + 3 patrones
+- [ ] 5. Llenar: quedan 2 servicios (API Gateway, EventBridge) y 9 patrones
+- [x] 6. Umbral de mostrar alcanzado: 4 servicios + 3 patrones
 
 ### Lo que el sistema resultó ser
 

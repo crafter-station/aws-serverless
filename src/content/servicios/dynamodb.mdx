@@ -1,7 +1,229 @@
 ---
 titulo: DynamoDB
+nombre_completo: Amazon DynamoDB
 icono: amazon-dynamo-db
-estado: esbozo
+estado: listo
+en_una_frase: >-
+  Una base de datos que te da latencia constante a cualquier escala a cambio de
+  una condición dura: tienes que saber de antemano cómo vas a consultar los
+  datos.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: La partition key es una dirección física
+    explicacion: >-
+      DynamoDB pasa la partition key por una función hash y el resultado decide
+      en qué partición —almacenamiento físico real— vive el elemento. De ahí
+      sale todo lo bueno (la latencia no depende del tamaño de la tabla) y todo
+      lo malo (si todos tus accesos caen en la misma clave, caen en la misma
+      partición y comparten su techo).
+  - termino: RCU y WCU son unidades de tamaño, no de operaciones
+    explicacion: >-
+      Una unidad de lectura es una lectura fuertemente consistente por segundo
+      de un elemento de hasta 4 KB —o dos eventualmente consistentes—. Una
+      unidad de escritura es una escritura por segundo de hasta 1 KB. Un
+      elemento de 20 KB consume 5 unidades por lectura consistente, así que el
+      mismo techo te da cinco veces menos operaciones.
+  - termino: Solo se consulta por clave
+    explicacion: >-
+      Query exige la partition key. No hay "buscar por email" salvo que exista
+      un índice con ese email como clave. Todo lo demás es un Scan, que lee la
+      tabla entera y te la cobra. Por eso el diseño empieza por las consultas y
+      no por las entidades.
+limites:
+  - concepto: Tamaño máximo de un elemento
+    valor: 400 KB
+    tipo: hard
+    nota: >-
+      Cuentan los nombres de los atributos, no solo los valores. Para cargas
+      mayores, guarda una referencia a S3 (claim-check).
+  - concepto: Throughput por partición
+    valor: 3 000 unidades de lectura/s · 1 000 de escritura/s
+    tipo: hard
+    nota: >-
+      El límite que decide arquitecturas. No se amplía con un ticket: se
+      esquiva repartiendo mejor la clave.
+  - concepto: Throughput por tabla
+    valor: 40 000 unidades de lectura y 40 000 de escritura
+    tipo: soft
+  - concepto: Throughput por cuenta (aprovisionado)
+    valor: 80 000 unidades de lectura y 80 000 de escritura
+    tipo: soft
+    nota: Solo aplica en modo aprovisionado. En on-demand no hay tope de cuenta.
+  - concepto: Índices secundarios globales (GSI)
+    valor: 20 por tabla
+    tipo: soft
+  - concepto: Índices secundarios locales (LSI)
+    valor: 5 por tabla
+    tipo: hard
+    nota: >-
+      Solo se pueden crear al crear la tabla, y nunca después. Es la decisión
+      menos reversible del servicio.
+  - concepto: Atributos proyectados
+    valor: 100 en total entre todos los índices
+    tipo: hard
+  - concepto: BatchGetItem
+    valor: 100 elementos · 16 MB
+    tipo: hard
+  - concepto: BatchWriteItem
+    valor: 25 elementos · 16 MB
+    tipo: hard
+    nota: No admite UpdateItem, solo PutItem y DeleteItem.
+  - concepto: Anidamiento de atributos
+    valor: 32 niveles
+    tipo: hard
+  - concepto: Retención de DynamoDB Streams
+    valor: 24 horas
+    tipo: hard
+    nota: No es Kinesis. Si tu consumidor está caído más de un día, esos cambios no vuelven.
+  - concepto: Lectores simultáneos por shard de Streams
+    valor: 2
+    tipo: hard
+    nota: En tablas globales, AWS recomienda uno solo para evitar throttling.
+  - concepto: Tamaño de la tabla
+    valor: sin límite
+    tipo: soft
+    nota: Ni en número de elementos ni en bytes.
+  - concepto: Tablas por región
+    valor: 2 500
+    tipo: soft
+    nota: Ampliable hasta 10 000; por encima, AWS recomienda repartir en varias cuentas.
+  - concepto: Bajadas de capacidad aprovisionada
+    valor: 4 al día, más 1 por hora, hasta 27
+    tipo: soft
 ---
 
-Por escribir.
+## Modelo mental
+
+DynamoDB no es "una base de datos NoSQL". Es una **tabla hash distribuida con
+persistencia**, y todo lo que te sorprenda de ella se explica volviendo a esa
+frase.
+
+Cuando escribes un elemento, DynamoDB pasa su partition key por una función
+hash y el resultado decide **en qué partición física** se guarda. Esa es la
+razón de su superpoder: da igual que la tabla tenga mil elementos o mil
+millones, porque leer por clave es ir directamente a una partición concreta. La
+latencia no depende del tamaño.
+
+Y es también la razón de su restricción, que la gente descubre tarde: **si no
+sabes la partition key, no sabes dónde mirar**. Un `Query` la exige siempre. Sin
+ella solo queda `Scan`, que recorre la tabla entera y te cobra por todo lo que
+lee, encuentre o no encuentre.
+
+De ahí sale la inversión mental que hay que hacer al venir de SQL: en una base
+relacional modelas las entidades y luego escribes las consultas que se te
+ocurran. Aquí **se empieza por la lista de consultas** y la tabla es lo que sale
+de ellas. Si aún no sabes cómo vas a consultar, todavía no puedes diseñar la
+tabla.
+
+### El techo que decide arquitecturas
+
+Cada partición está diseñada para dar como máximo **3 000 unidades de lectura
+por segundo y 1 000 de escritura**. Ese número no se amplía con un ticket, y es
+el más importante del servicio.
+
+Ahora júntalo con el segundo concepto: las unidades son de **tamaño**, no de
+operaciones. Una unidad de lectura cubre una lectura consistente de hasta 4 KB.
+El ejemplo es de la propia documentación de AWS: con elementos de 20 KB, cada
+lectura consistente consume 5 unidades, así que sobre una sola clave puedes
+sostener unas **600 lecturas por segundo** antes de tocar el techo — no 3 000.
+
+Por eso una tabla en on-demand, sin límites de cuenta aparentes, puede empezar
+a devolver `ProvisionedThroughputExceededException` mientras tu gráfica de
+consumo total va holgada: el problema no es el total, es que todo cae en la
+misma partición. Eso es una **partición caliente**, y la solución no es subir
+capacidad sino repartir mejor la clave.
+
+## Cómo te factura
+
+Dos modelos, y elegir mal es de los errores más caros:
+
+| Modo | Cómo se paga | Cuándo conviene |
+| --- | --- | --- |
+| On-demand | por petición servida | tráfico irregular, picos, no sabes el volumen |
+| Aprovisionado | por capacidad reservada, la uses o no | tráfico estable y conocido |
+
+A esto se suma el **almacenamiento** por GB-mes, que en tablas grandes acaba
+siendo la línea principal, y las **réplicas de los índices**: cada GSI guarda su
+propia copia de los atributos proyectados y consume su propia capacidad de
+escritura. Una tabla con cinco GSI que proyectan todo es, a efectos de coste de
+escritura y de almacenamiento, seis tablas.
+
+Tres detalles de facturación que sorprenden:
+
+**Una escritura condicional que falla también se cobra.** La documentación es
+explícita: si la condición se evalúa a falso, DynamoDB consume capacidad de
+escritura igualmente — un mínimo de 1 unidad si el elemento no existía, o el
+tamaño del elemento existente si existía. Importa mucho en el patrón de
+idempotencia, donde cada duplicado detectado es una escritura fallida que pagas.
+
+**Un LSI comparte la capacidad de la tabla; un GSI tiene la suya.** Es una
+diferencia de diseño con consecuencias directas en la factura y en el
+throttling.
+
+**Los `FilterExpression` no ahorran nada.** Filtran *después* de leer. Pagas por
+todo lo que DynamoDB recorrió, no por lo que te devolvió. Un filtro no es un
+índice ni se le parece.
+
+## Cuándo NO usarlo
+
+- **No sabes todavía cómo vas a consultar.** Es el caso más común y el más
+  caro: sin patrones de acceso claros acabas con Scans, o rehaciendo la tabla.
+  Si estás explorando el dominio, empieza en PostgreSQL y migra lo que se
+  demuestre caliente.
+- **Necesitas consultas ad hoc, joins o agregaciones.** No hay `GROUP BY`, no
+  hay `SUM`, no hay `JOIN`. Los agregados se mantienen a mano con Streams, y eso
+  es código que hay que escribir y mantener.
+- **Necesitas búsqueda de texto o filtros multi-atributo.** Eso es OpenSearch.
+- **Los elementos pasan de 400 KB.** Guarda una referencia a S3.
+- **El acceso está concentrado en una sola clave.** Un contador global muy
+  caliente choca contra el techo de partición por diseño; ahí quieres un caché
+  o un sharding explícito de la clave.
+- **Tu equipo no va a mantener la disciplina.** Un modelo de datos de DynamoDB
+  bien hecho es rígido a propósito. Sin alguien que sostenga esa rigidez,
+  degenera en Scans con filtros.
+
+## Errores comunes
+
+**Usar `Scan` en producción.** Funciona con mil elementos y es una bomba con un
+millón. Casi siempre significa que falta un índice o que la clave está mal
+elegida.
+
+**Elegir una partition key poco cardinal.** `estado` o `pais` como partition key
+concentra millones de elementos en un puñado de particiones. La clave quiere
+**muchos valores distintos y tráfico repartido entre ellos**, no ser cómoda de
+leer.
+
+**Confundir `FilterExpression` con un índice.** Pagas por lo leído, no por lo
+devuelto. Un filtro que descarta el 99 % te cuesta el 100 %.
+
+**Usar contadores atómicos donde hace falta exactitud.** AWS lo advierte:
+`SET Precio = Precio + :n` **no es idempotente**. Si reintentas, cuenta dos
+veces. Para saldos o stock, escritura condicional.
+
+**Crear un LSI "por si acaso".** Solo se pueden crear en el momento de crear la
+tabla y no se pueden añadir ni quitar después. Es la decisión menos reversible
+de DynamoDB. Casi siempre lo que querías era un GSI.
+
+**Proyectar `ALL` en todos los GSI.** Multiplica almacenamiento y capacidad de
+escritura. Proyecta lo que la consulta necesita, y recuerda que el total de
+atributos proyectados entre todos los índices son 100.
+
+**Tratar Streams como una cola duradera.** Los registros viven **24 horas**. Si
+el consumidor está caído un fin de semana, esos cambios no existen. Para
+retención de verdad, Kinesis.
+
+## Fuentes
+
+Tamaño máximo de elemento, límites de `BatchGetItem` y `BatchWriteItem`,
+consumo de capacidad de una escritura condicional fallida, no idempotencia de
+los contadores atómicos y reparto de capacidad de los LSI:
+[Working with items and attributes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html).
+Throughput por partición, definición de RCU y WCU y el ejemplo de las 600
+lecturas:
+[Best practices for designing and using partition keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html).
+Cuotas de throughput, índices, tablas por región y bajadas de capacidad:
+[Quotas in Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html).
+Anidamiento, GSI frente a LSI y retención de Streams:
+[Core components of Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html).
+Los modelos de precio proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente.
