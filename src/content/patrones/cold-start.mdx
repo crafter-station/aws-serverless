@@ -1,7 +1,299 @@
 ---
 titulo: Cold start
+alias: Cold start / function init latency
 familia: Escala
-estado: esbozo
+estado: listo
+dificultad: 2
+intencion: Entender qué tarda de verdad cuando Lambda arranca un entorno nuevo, cuánto de eso puedes acortar tú, y decidir con criterio si merece la pena pagar por evitarlo.
+verificado_en: "2026-09-06"
+servicios: [lambda, api-gateway]
+relacionados:
+  - patron: fan-out
+    tipo: se combina con
+    porque: >-
+      Cada rama de un fan-out es una función distinta con su propia curva de
+      concurrencia, así que cada rama paga sus propios arranques en frío. El
+      cuello no es el total del sistema: es la rama que más escala de golpe.
+  - patron: presigned-urls
+    tipo: compite con
+    porque: >-
+      La forma más rápida de eliminar un arranque en frío es no invocar la
+      función. Una URL prefirmada saca a Lambda del camino de datos y con ella
+      el problema entero.
+  - patron: concurrencia-reservada
+    tipo: se combina con
+    porque: >-
+      Los dos se configuran en el mismo sitio y hacen cosas opuestas: la
+      reservada limita cuánto puede escalar una función, la aprovisionada
+      precalienta entornos. Confundirlas es habitual.
 ---
 
-Por escribir.
+import ColdStartLinea from '../../components/diagrama/ColdStartLinea.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu API responde en 80 ms. Casi siempre. Y de vez en cuando, sin patrón
+aparente, alguien espera dos segundos y medio.
+
+No es la red, no es la base de datos, y no sale en los logs de tu función
+porque **el tiempo se fue antes de que tu handler existiera**. Lambda tuvo que
+construir un entorno de ejecución desde cero, y eso tiene un coste que se
+factura y que el cliente nota.
+
+<ColdStartLinea />
+
+Lo primero que hay que interiorizar, porque cambia todas las decisiones que
+vienen después, es **cuánto de esa barra es tuyo**.
+
+La fase `Init` que ejecuta Lambda tiene tres tareas: arrancar las extensiones,
+arrancar el runtime y **ejecutar tu código estático** — todo lo que está fuera
+del handler. Las dos primeras las hace AWS y no las controlas. La tercera es
+tuya, y en la mayoría de las funciones lentas es, con diferencia, la más larga:
+importar medio SDK, levantar un framework, leer configuración, abrir conexiones.
+
+<Caja tipo="clave">
+No se optimiza "el cold start". Se optimiza **tu código de init**, que es el
+único tramo de la barra sobre el que puedes escribir código. Todo lo demás son
+decisiones de configuración que se pagan con dinero.
+</Caja>
+
+### Cuánto pasa de verdad
+
+Aquí conviene un baño de realismo, porque el cold start es probablemente el tema
+sobre el que más se ha escrito y menos se ha medido. La documentación de AWS es
+directa:
+
+> Los arranques en frío ocurren típicamente **en menos del 1 % de las
+> invocaciones**, y su duración va **desde menos de 100 ms hasta más de un
+> segundo**.
+
+Y añade un dato que cambia la conversación: son **más frecuentes en funciones de
+desarrollo y de test que en producción**, precisamente porque se invocan menos.
+
+Eso explica por qué tanta gente lo percibe como un problema enorme: lo sufre a
+diario en su entorno de desarrollo, donde invoca la función una vez cada media
+hora. En producción, con tráfico sostenido, el mismo código casi nunca lo toca.
+
+**Mide antes de pagar.** El campo `Init Duration` aparece en la línea `REPORT`
+de CloudWatch Logs. Si no sabes qué porcentaje de tus invocaciones son frías ni
+cuánto duran, no tienes un problema de cold start: tienes una intuición.
+
+## La solución
+
+Tres palancas, en orden de lo que deberías intentar primero:
+
+### 1. Adelgazar el init (gratis)
+
+Es lo que más devuelve por unidad de esfuerzo y lo único que no cuesta dinero.
+
+- **Importa lo que usas.** `require('@aws-sdk/client-dynamodb')` en vez del SDK
+  entero. Es la recomendación literal de AWS y en runtimes interpretados se
+  nota mucho.
+- **Crea los clientes fuera del handler**, una vez por entorno, no una por
+  invocación.
+- **Carga en diferido** lo que solo se usa en algunos caminos. Si una
+  dependencia pesada solo hace falta en el 5 % de las peticiones, que se cargue
+  en ese 5 %.
+- **Parte funciones gordas.** Una función que hace cinco cosas inicializa las
+  cinco aunque la invocación solo necesite una.
+- **Cuida el tamaño del paquete.** El límite son 250 MB descomprimidos
+  incluyendo capas, pero mucho antes de ese techo ya estás pagando en latencia.
+
+### 2. SnapStart (barato, pero no para todos)
+
+Lambda inicializa la función **al publicar la versión**, hace un snapshot cifrado
+de la memoria y el disco, y al invocar restaura desde ahí en vez de arrancar de
+cero. AWS habla de bajar la latencia de varios segundos a **menos de un
+segundo**.
+
+El detalle que decide si te sirve: **solo funciona en Java 11+, Python 3.12+ y
+.NET 8+**. Node.js y Ruby no están soportados, y los runtimes OS-only tampoco.
+Si tu backend es TypeScript, SnapStart no es una opción para ti.
+
+Además solo se activa en **versiones publicadas y alias**, nunca en `$LATEST`, y
+es incompatible con concurrencia aprovisionada, EFS y almacenamiento efímero por
+encima de 512 MB.
+
+### 3. Concurrencia aprovisionada (funciona siempre, y se paga siempre)
+
+Lambda mantiene N entornos ya inicializados y esperando. Es la única opción que
+elimina el arranque en frío del todo y la única que funciona con cualquier
+runtime. También es la única que **se factura por tenerla, haya tráfico o no**:
+un coste fijo dentro de un servicio que compraste por ser variable.
+
+## Cuándo usarlo
+
+- La función está en un **camino síncrono con un humano esperando**: una API
+  pública, un login, un checkout.
+- Tienes un **p99 con SLA** y has medido que el `Init Duration` es lo que lo
+  rompe.
+- Hay **picos bruscos y predecibles** —una campaña, una apertura de mercado— en
+  los que Lambda tendrá que crear muchos entornos a la vez.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Consumidores asíncronos.** Una Lambda que procesa una cola SQS puede tardar
+  dos segundos en arrancar y a nadie le importa. Pagar concurrencia
+  aprovisionada ahí es tirar dinero.
+- **No lo has medido.** Sin el `Init Duration` de tus propias trazas, cualquier
+  optimización es superstición. Y recuerda que tu entorno de desarrollo miente
+  al alza.
+- **Tráfico bajo y constante.** Si tienes cinco peticiones por minuto, la
+  concurrencia aprovisionada te va a costar más que el problema que resuelve.
+- **Estás usando Node.js y pensabas en SnapStart.** No está soportado. La
+  conversación ahí es adelgazar el init o pagar concurrencia aprovisionada.
+- **El verdadero problema es otro.** Un arranque en frío de 300 ms no explica
+  una API que tarda 3 segundos. Mira antes las llamadas a la base de datos y
+  el arranque de la conexión a la VPC.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Mide.** Filtra `Init Duration` en CloudWatch Logs Insights y saca dos
+   números: qué porcentaje de invocaciones son frías y cuánto dura el init.
+2. **Si el init es largo, adelgázalo** antes de tocar nada más. Suele ser la
+   diferencia entre 1,5 s y 300 ms.
+3. **Si sigue doliendo y el runtime lo permite**, activa SnapStart en la versión
+   publicada y mide otra vez.
+4. **Si el SLA es duro o el runtime no soporta SnapStart**, pon concurrencia
+   aprovisionada sobre un alias, dimensionada al percentil de concurrencia real
+   —no al pico absoluto—, y deja que el resto desborde a bajo demanda.
+5. **Vuelve a medir.** Es el paso que casi nadie hace.
+
+## El código
+
+```ts
+// ── Fuera del handler: se ejecuta una vez por entorno ──────────────
+// Importar el cliente concreto y no el SDK entero es la recomendacion
+// explicita de AWS, y en runtimes interpretados se nota.
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+
+// Carga en diferido: la libreria pesada solo se paga en el camino que
+// de verdad la usa, no en cada arranque en frio.
+let pdf: typeof import('./pdf') | undefined;
+const cargarPdf = async () => (pdf ??= await import('./pdf'));
+
+export const handler = async (evento: Evento) => {
+  const pedido = await ddb.send(leer(evento.id));
+
+  if (evento.formato === 'pdf') {
+    const { generar } = await cargarPdf();
+    return generar(pedido);
+  }
+
+  return pedido;
+};
+```
+
+```
+-- CloudWatch Logs Insights: cuánto y cuántas veces --
+filter @type = "REPORT"
+| stats count(*) as invocaciones,
+        count(@initDuration) as frias,
+        count(@initDuration) * 100 / count(*) as pct_frias,
+        avg(@initDuration) as init_medio,
+        pct(@initDuration, 99) as init_p99
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · El init tiene su propio timeout de 10 segundos">
+La fase `Init` está limitada a **10 segundos**, y no es el timeout de tu
+función. Si las tres tareas no terminan en ese plazo, Lambda **reintenta el init
+en el momento de la primera invocación**, esta vez con el timeout configurado de
+la función.
+
+El resultado es desconcertante: una primera invocación que tarda muchísimo más
+de lo que dice tu `Init Duration`, o que falla con un error que no cuadra con
+nada. En los logs aparece como `INIT_REPORT ... Status: timeout`.
+
+Ese límite de 10 segundos **no aplica** si usas concurrencia aprovisionada o
+SnapStart: ahí el init puede durar hasta 15 minutos.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · La duración que ves puede incluir un init que no ves">
+Cuando una invocación falla, Lambda resetea el entorno. La siguiente invocación
+vuelve a ejecutar la fase `Init`, pero **CloudWatch no la reporta como un init
+aparte**: la mete dentro de la duración de la invocación. Es lo que AWS llama
+*suppressed init*.
+
+Consecuencia práctica: ves un `Duration: 3022 ms` que no cuadra con la
+diferencia entre el `START` y el `REPORT`, y te vuelves loco buscando dónde se
+fueron esos segundos dentro de tu handler. No estaban en tu handler.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · SnapStart congela lo que creíste único">
+Como Lambda usa **un solo snapshot** como estado inicial de muchos entornos,
+todo lo que tu código de init genere una vez se reutiliza en todos ellos. Si
+inicializas ahí un identificador único, un secreto o —el caso peligroso— la
+semilla de un generador de números pseudoaleatorios, **todos los entornos
+compartirán el mismo valor**.
+
+AWS lo dice sin rodeos: si tu aplicación depende de la unicidad, tienes que
+generar ese contenido *después* de la inicialización. Y las conexiones de red
+abiertas durante el init no están garantizadas al restaurar; las del SDK de AWS
+suelen reanudarse solas, las demás hay que revalidarlas.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · El entorno caliente no dura para siempre">
+Es tentador tratar el entorno reutilizado como si fuera un servidor. No lo es:
+AWS **termina los entornos cada pocas horas** para aplicar actualizaciones,
+incluso en funciones que se invocan continuamente.
+
+Dos consecuencias que muerden de verdad: una caché en memoria puede evaporarse
+en cualquier momento, y **los procesos en segundo plano que no terminaron
+cuando tu función devolvió el control se reanudan** si Lambda reutiliza el
+entorno. Ese `setTimeout` huérfano se ejecuta en mitad de la invocación de otro
+usuario.
+
+Y `/tmp` sobrevive al congelado — e incluso al reset que sigue a un fallo. Es
+una caché estupenda y una fuga de datos entre invocaciones si no lo tienes en
+cuenta.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Aprovisionada y reservada no son lo mismo">
+Se configuran en la misma pantalla y hacen cosas casi opuestas:
+
+- **Concurrencia reservada**: aparta un trozo del cupo de la cuenta para esta
+  función. Se lo garantiza *y* le impide pasar de ahí. No precalienta nada.
+- **Concurrencia aprovisionada**: mantiene N entornos ya inicializados. Cuesta
+  dinero por tenerla.
+
+Poner reservada creyendo que evita cold starts es un error que se ve mucho, y
+además introduce un techo de escalado que no querías.
+</Caja>
+
+## Coste
+
+| Palanca | Coste |
+| --- | --- |
+| Adelgazar el init | **gratis**, y además baja la factura de duración |
+| SnapStart en Java | **sin coste adicional** |
+| SnapStart en Python y .NET | caché del snapshot (mínimo 3 horas) + cargo por restauración |
+| Concurrencia aprovisionada | por entorno y hora, haya tráfico o no |
+
+La fase de init **se factura** como duración, así que acortarla no solo mejora
+la latencia: baja la factura de todas las invocaciones frías. Es la única de las
+tres palancas que ahorra dinero en vez de gastarlo.
+
+Detalle de SnapStart que sorprende: en los runtimes gestionados de **Java no
+tiene coste adicional**. En Python y .NET sí pagas por mantener el snapshot en
+caché —con un mínimo de 3 horas por versión publicada— y por cada restauración.
+Las versiones antiguas que nadie borra siguen facturando.
+
+## Fuentes
+
+Fases `Init`, `Invoke`, `Restore` y `Shutdown`, el límite de 10 segundos del
+init y su excepción, los *suppressed inits*, la persistencia de `/tmp`, los
+procesos en segundo plano, la terminación periódica de entornos y las cifras de
+frecuencia y duración de los arranques en frío:
+[Understanding the Lambda execution environment lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html).
+Runtimes soportados, incompatibilidades, problema de unicidad y precios:
+[Improving startup performance with Lambda SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html).
+Cuotas de memoria, paquete de despliegue y concurrencia:
+[Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html).

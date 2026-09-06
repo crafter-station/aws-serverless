@@ -18,6 +18,12 @@ relacionados:
     porque: >-
       Una por cola, siempre. La redrive policy de SQS atrapa el fallo del
       consumidor, que es de donde vienen casi todos.
+  - patron: cold-start
+    tipo: se combina con
+    porque: >-
+      Cada rama es una función distinta con su propia curva de concurrencia, así
+      que cada una paga sus propios arranques en frío. El cuello no es el total
+      del sistema: es la rama que más escala de golpe.
   - patron: claim-check
     tipo: se combina con
     porque: Cuando el evento no cabe en los 256 KiB que admite SNS.

@@ -1,7 +1,272 @@
 ---
 titulo: Single-table design
+alias: Single-table design
 familia: Datos
-estado: esbozo
+estado: listo
+dificultad: 3
+intencion: Guardar varios tipos de entidad en una misma tabla de DynamoDB con claves genéricas, de modo que una sola consulta devuelva todo lo que una pantalla necesita en vez de cinco.
+verificado_en: "2026-09-06"
+servicios: [dynamodb, lambda]
+relacionados:
+  - patron: idempotencia-en-consumidores
+    tipo: se combina con
+    porque: >-
+      Las claves de idempotencia pueden vivir en la misma tabla detrás de un
+      prefijo. Es cómodo y es peligroso: mezcla un TTL agresivo con datos que
+      no quieres perder.
+  - patron: outbox-con-dynamodb-streams
+    tipo: se combina con
+    porque: >-
+      El outbox escribe el evento en la misma tabla y en la misma transacción
+      que el dato. Sin tabla única no hay transacción que compartir.
+  - patron: write-sharding
+    tipo: se combina con
+    porque: >-
+      Single-table concentra tráfico bajo pocas claves por diseño. Cuando una
+      de ellas se calienta, el sharding de escritura es la salida.
 ---
 
-Por escribir.
+import TablaUnica from '../../components/TablaUnica.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Vienes de SQL y modelas como te enseñaron: una tabla `clientes`, una `pedidos`,
+una `direcciones`, una `lineas_pedido`. En DynamoDB creas cuatro tablas y sigues
+adelante.
+
+Entonces llega la pantalla de "detalle del cliente", que necesita el perfil, sus
+últimos pedidos y sus direcciones. En SQL eso era un `JOIN`. Aquí son **tres
+consultas**, y como DynamoDB no tiene joins, las haces desde la Lambda:
+
+```ts
+const perfil      = await ddb.get({ TableName: 'clientes', Key: { id } });
+const pedidos     = await ddb.query({ TableName: 'pedidos', ... });
+const direcciones = await ddb.query({ TableName: 'direcciones', ... });
+```
+
+Cada una es rápida —cinco milisegundos— pero has convertido una pantalla en tres
+viajes de red que se suman, y en tres cosas que pueden fallar por separado.
+Cuando la pantalla crezca a cinco entidades, serán cinco.
+
+Y hay un problema peor que la latencia: **no puedes leerlas de forma
+consistente**. Entre tu primera consulta y la tercera, otro proceso pudo cambiar
+los datos. En SQL el `JOIN` te daba una foto coherente; aquí tienes tres fotos
+tomadas en tres momentos.
+
+<Caja tipo="clave">
+DynamoDB no tiene joins, así que la unión hay que hacerla **en el momento de
+escribir**, no en el de leer. Single-table design es exactamente eso:
+pre-unir los datos guardándolos juntos.
+</Caja>
+
+## La solución
+
+Una sola tabla, con las claves primarias renombradas a algo deliberadamente
+genérico —`PK` y `SK`— y los distintos tipos de entidad conviviendo dentro,
+distinguidos por un prefijo en la clave.
+
+<TablaUnica
+  resaltar="CLIENTE#42"
+  pie="Una sola <strong>Query</strong> con <code>PK = CLIENTE#42</code> devuelve las cuatro filas resaltadas: el perfil, los dos pedidos y la dirección. Un viaje de red, una foto coherente. Las líneas del pedido viven bajo otra clave porque nadie las pide a la vez que el perfil."
+  filas={[
+    { pk: 'CLIENTE#42', sk: 'PERFIL',                      tipo: 'perfil',    atributos: 'nombre, email, alta' },
+    { pk: 'CLIENTE#42', sk: 'DIRECCION#casa',              tipo: 'direccion', atributos: 'calle, ciudad, cp' },
+    { pk: 'CLIENTE#42', sk: 'PEDIDO#2026-09-01#1001',      tipo: 'pedido',    atributos: 'total, estado' },
+    { pk: 'CLIENTE#42', sk: 'PEDIDO#2026-09-03#1002',      tipo: 'pedido',    atributos: 'total, estado' },
+    { pk: 'PEDIDO#1001', sk: 'LINEA#1',                    tipo: 'linea',     atributos: 'sku, cantidad, precio' },
+    { pk: 'PEDIDO#1001', sk: 'LINEA#2',                    tipo: 'linea',     atributos: 'sku, cantidad, precio' },
+  ]}
+/>
+
+Tres ideas hacen que esto funcione:
+
+**La colección de elementos.** Todos los elementos que comparten `PK` se guardan
+físicamente juntos y ordenados por `SK`. Una `Query` sobre `PK = CLIENTE#42` los
+devuelve todos de una vez, en un solo viaje. Eso es el sustituto del `JOIN`.
+
+**El prefijo en la clave de ordenación.** Como el `SK` se ordena
+lexicográficamente, `PERFIL`, `DIRECCION#…` y `PEDIDO#…` quedan agrupados por
+tipo. Y como los pedidos llevan la fecha antes del id, salen ordenados por
+fecha sin hacer nada: `SK begins_with "PEDIDO#2026-09"` te da los de septiembre.
+
+**El GSI sobrecargado.** Un índice con claves igual de genéricas —`GSI1PK`,
+`GSI1SK`— sirve para varios patrones de acceso a la vez, porque cada tipo de
+entidad mete ahí lo que necesita. Un solo GSI puede resolver "pedidos por
+estado" y "clientes por email" según qué haya escrito cada uno.
+
+## Cuándo usarlo
+
+- La aplicación tiene **patrones de acceso conocidos y estables**, y una
+  pantalla necesita varias entidades relacionadas a la vez.
+- Las relaciones son **jerárquicas**: cliente y sus pedidos, pedido y sus
+  líneas, tenant y sus recursos.
+- Te importan la **latencia y el número de viajes** más que la comodidad de
+  escribir consultas nuevas.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Aún no sabes cómo vas a consultar.** Es la condición previa de todo esto, y
+  la razón por la que single-table se le atraganta a tanta gente: exige un
+  conocimiento del dominio que en un producto nuevo todavía no tienes.
+- **Las consultas van a cambiar mucho.** Un patrón de acceso nuevo puede exigir
+  un GSI nuevo o, en el peor caso, reescribir las claves de los elementos
+  existentes. En SQL eso era un `CREATE INDEX`.
+- **El equipo no lo ha hecho antes.** El modelo es difícil de leer —una tabla
+  con `PK`, `SK` y seis tipos de entidad mezclados no se entiende de un vistazo—
+  y degenera rápido si alguien "solo añade un Scan".
+- **Necesitas informes o agregados.** No hay `GROUP BY`. Exporta a S3 y consulta
+  con Athena, o mantén los agregados a mano con Streams.
+- **Son dos entidades y no van a crecer.** Dos tablas simples son más legibles,
+  más fáciles de cambiar y suficientemente rápidas. Single-table no es una
+  buena práctica universal: es una optimización con un coste de complejidad muy
+  real.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Escribe primero la lista de patrones de acceso.** Literalmente, en una
+   tabla: "dado un cliente, traer su perfil y sus últimos 20 pedidos". Si la
+   lista está vacía, para aquí.
+2. **Agrupa por lo que se lee junto.** Lo que una pantalla pide a la vez quiere
+   compartir `PK`.
+3. **Diseña el `SK` para que ordene.** Prefijo de tipo, y dentro, lo que quieras
+   que salga en orden: fecha antes que id, casi siempre.
+4. **Añade GSI sobrecargados** solo para los patrones que la tabla base no
+   cubre. Recuerda el techo: 20 GSI por tabla y **100 atributos proyectados
+   sumando todos los índices**.
+5. **Proyecta lo justo.** Cada GSI es una copia con su propio almacenamiento y
+   su propia capacidad de escritura.
+6. **Documenta el modelo.** Una tabla de patrones de acceso a claves, en el
+   repositorio. Sin ella, el siguiente que llegue hará un Scan.
+
+## El código
+
+```ts
+// Un unico Query devuelve el perfil, las direcciones y los pedidos.
+const { Items } = await ddb.send(new QueryCommand({
+  TableName: 'app',
+  KeyConditionExpression: 'PK = :pk',
+  ExpressionAttributeValues: { ':pk': `CLIENTE#${id}` },
+}));
+
+// El tipo se deduce del prefijo del SK: la tabla es generica,
+// el codigo que la lee no tiene por que serlo.
+const perfil = Items.find((i) => i.SK === 'PERFIL');
+const direcciones = Items.filter((i) => i.SK.startsWith('DIRECCION#'));
+const pedidos = Items.filter((i) => i.SK.startsWith('PEDIDO#'));
+
+// Solo los pedidos de septiembre, ya ordenados por fecha porque
+// la fecha va delante del id en el SK.
+const septiembre = await ddb.send(new QueryCommand({
+  TableName: 'app',
+  KeyConditionExpression: 'PK = :pk AND begins_with(SK, :mes)',
+  ExpressionAttributeValues: {
+    ':pk': `CLIENTE#${id}`,
+    ':mes': 'PEDIDO#2026-09',
+  },
+  ScanIndexForward: false, // los mas recientes primero
+}));
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · La colección de elementos vive en una partición">
+Es la consecuencia que más gente pasa por alto. Todos los elementos con la misma
+`PK` están en la **misma partición física**, y una partición da como máximo
+**3 000 unidades de lectura y 1 000 de escritura por segundo**.
+
+Si tu `PK` es `TENANT#acme` y Acme es el 80 % de tu tráfico, has diseñado una
+partición caliente a propósito. El límite no se amplía con un ticket: se esquiva
+repartiendo la clave.
+
+Y recuerda que las unidades son de tamaño: con elementos de 20 KB, cada lectura
+consistente consume 5 unidades, así que ese techo son unas 600 lecturas por
+segundo, no 3 000.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · Los 400 KB son de la suma">
+Un elemento no puede pasar de **400 KB**, contando los nombres de los atributos
+y no solo sus valores. Con nombres genéricos y descriptivos por todas partes eso
+se acerca antes de lo que parece.
+
+El caso que muerde de verdad es el de las colecciones sin techo: si modelas
+"los comentarios de un post" como elementos bajo la misma `PK`, la colección
+puede crecer sin límite —eso está bien— pero si los modelas como una lista
+*dentro* de un elemento, chocas contra los 400 KB y te enteras en producción.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Un LSI no se puede añadir después">
+Los índices secundarios locales **solo se pueden crear al crear la tabla**. No
+se añaden, no se quitan, no se modifican. Es la decisión menos reversible de
+DynamoDB, y en un modelo single-table —donde el esquema evoluciona a base de
+añadir patrones de acceso— es un compromiso muy caro.
+
+Casi siempre lo que querías era un GSI: 20 por tabla, y se añaden y se borran en
+caliente.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Un patrón de acceso nuevo puede exigir una migración">
+En SQL, una consulta nueva es un `CREATE INDEX`. Aquí, si el patrón nuevo no
+encaja con las claves que ya escribiste, hay que **recorrer la tabla y
+reescribir los elementos** para darles el `GSI1PK` que les falta.
+
+No es imposible —se hace con un Scan y una escritura por elemento— pero es un
+proyecto, no una tarde. Por eso el requisito de conocer los patrones de acceso
+no es un consejo: es la condición de entrada.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Mezclar TTL con datos que no caducan">
+Es tentador meter también las claves de idempotencia, las sesiones y las cachés
+en la tabla única. Se puede, pero mezcla ciclos de vida opuestos: los pedidos
+duran años, las claves duran días.
+
+El día que alguien calcule mal el atributo de TTL, DynamoDB empezará a borrar
+pedidos, en silencio y sin consumir capacidad de escritura que te alerte. Si
+compartes tabla, ten muy claro qué elementos llevan el atributo de TTL y cuáles
+no pueden llevarlo nunca.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · Nadie sabe leer tu tabla">
+Abre la consola de DynamoDB sobre un modelo single-table maduro: `PK`, `SK`,
+`GSI1PK`, `GSI1SK` y ocho tipos de entidad mezclados. Nadie —incluido tú dentro
+de seis meses— entiende qué hay ahí sin la documentación.
+
+Ese coste es real y no aparece en ningún benchmark. La tabla de patrones de
+acceso a claves, versionada en el repositorio, no es documentación opcional: es
+parte del sistema.
+</Caja>
+
+## Coste
+
+Single-table **no es más barato por ser una tabla**: DynamoDB factura por
+petición y por almacenamiento, no por número de tablas. Lo que ahorra es otra
+cosa:
+
+| Concepto | Efecto |
+| --- | --- |
+| Consultas por pantalla | de N a 1 — menos peticiones y menos latencia |
+| Almacenamiento | igual: los mismos datos ocupan lo mismo |
+| GSI | cada uno es una copia con su propia capacidad de escritura |
+| Complejidad del equipo | **sube**, y no aparece en la factura |
+
+El ahorro real está en el número de peticiones y en los viajes de red. Si tu
+pantalla hacía cinco consultas y ahora hace una, has dividido por cinco tanto el
+coste de lectura como la latencia acumulada.
+
+Lo que sube es el coste humano. Es un intercambio legítimo cuando el volumen lo
+justifica, y un mal negocio cuando se hace por seguir una buena práctica que
+alguien leyó en un blog.
+
+## Fuentes
+
+Tamaño máximo de elemento, límites de operaciones por lote y reparto de
+capacidad entre tabla e índices:
+[Working with items and attributes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html).
+Throughput por partición y el ejemplo del elemento de 20 KB:
+[Best practices for designing and using partition keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html).
+Cuotas de GSI, LSI y atributos proyectados, y la irreversibilidad de los LSI:
+[Quotas in Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html).
+Comportamiento del borrado por TTL:
+[Using time to live (TTL) in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html).

@@ -1,0 +1,53 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+/*
+  Las duraciones son un ejemplo plausible de una función con un framework
+  pesado, no una medición. Lo que el diagrama cuenta es la FORMA de la barra,
+  no los números.
+*/
+const X = 118;
+---
+
+<Diagrama
+  ancho={700}
+  alto={396}
+  titulo="Cuatro líneas de tiempo de invocación comparadas: arranque en frío completo, arranque en caliente, SnapStart y concurrencia aprovisionada. En el frío, descargar el código y levantar el entorno preceden al código de init y al handler; en los otros tres, parte o todo ese trabajo ya está hecho."
+  pie="<strong>Solo uno de los cuatro tramos es tuyo.</strong> Descargar el código y levantar el entorno los hace AWS y no los controlas. El tramo naranja —tu código de init— es el único que puedes acortar escribiendo código, y suele ser el más largo."
+>
+  <Barra
+    x={X} y={44} titulo="En frío"
+    sub="Lo paga menos del 1 % de las invocaciones"
+    segmentos={[
+      { etiqueta: 'código', ancho: 88, tono: 'arranque' },
+      { etiqueta: 'entorno', ancho: 84, tono: 'arranque' },
+      { etiqueta: 'tu código de init', ancho: 172, tono: 'init' },
+      { etiqueta: 'handler', ancho: 76, tono: 'handler' },
+    ]}
+  />
+
+  <Barra
+    x={X} y={132} titulo="En caliente"
+    sub="El entorno ya existe. Es el caso normal en producción."
+    segmentos={[{ etiqueta: 'handler', ancho: 76, tono: 'handler' }]}
+  />
+
+  <Barra
+    x={X} y={220} titulo="SnapStart"
+    sub="Java, Python y .NET. En Node.js no existe."
+    segmentos={[
+      { etiqueta: 'restaurar', ancho: 96, tono: 'arranque' },
+      { etiqueta: 'handler', ancho: 76, tono: 'handler' },
+    ]}
+  />
+
+  <Barra
+    x={X} y={308} titulo="Aprovisionada"
+    sub="Inicializada antes de que llegue la petición. Se paga esté ociosa o no."
+    segmentos={[{ etiqueta: 'handler', ancho: 76, tono: 'handler' }]}
+  />
+
+  <Etiqueta x={110} y={62} texto="tiempo →" ancla="end" />
+</Diagrama>

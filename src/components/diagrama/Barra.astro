@@ -1,0 +1,75 @@
+---
+/*
+  Línea de tiempo por segmentos. Nació de la ficha de cold start: los nodos y
+  las flechas cuentan quién llama a quién, pero no cuentan cuánto dura cada
+  cosa, y ahí el eje que importa es el tiempo.
+*/
+interface Segmento {
+  etiqueta: string;
+  /** Anchura en unidades del lienzo. La escala la decide el diagrama. */
+  ancho: number;
+  tono?: 'arranque' | 'init' | 'handler' | 'espera';
+}
+
+interface Props {
+  x: number;
+  y: number;
+  alto?: number;
+  titulo: string;
+  sub?: string;
+  segmentos: Segmento[];
+}
+const { x, y, alto = 30, titulo, sub, segmentos } = Astro.props;
+
+// Posición acumulada de cada segmento.
+let cursor = x;
+const piezas = segmentos.map((s) => {
+  const pieza = { ...s, x: cursor };
+  cursor += s.ancho;
+  return pieza;
+});
+const total = cursor - x;
+---
+
+<g class="barra">
+  <text x={x} y={y - 8} class="barra__titulo">{titulo}</text>
+  {/* Debajo y alineado a la izquierda: a la derecha de la barra se sale del lienzo. */}
+  {sub && <text x={x} y={y + alto + 14} class="barra__sub">{sub}</text>}
+
+  {piezas.map((p) => (
+    <g class={`seg seg--${p.tono ?? 'handler'}`}>
+      <rect x={p.x} y={y} width={p.ancho} height={alto} rx="3" />
+      {p.ancho >= 60 && (
+        <text x={p.x + p.ancho / 2} y={y + alto / 2 + 4} class="seg__etiqueta">{p.etiqueta}</text>
+      )}
+    </g>
+  ))}
+</g>
+
+<style>
+  .barra__titulo {
+    font-family: var(--sans); font-size: 11px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; fill: var(--tinta-suave);
+  }
+  .barra__sub { font-family: var(--sans); font-size: 11px; fill: var(--tinta-tenue); }
+
+  .seg rect { stroke-width: 1; }
+  .seg__etiqueta {
+    text-anchor: middle; font-family: var(--sans); font-size: 10.5px; font-weight: 600;
+  }
+
+  /* Descargar el código y levantar el entorno: lo que hace AWS, no tú. */
+  .seg--arranque rect { fill: #e7dfd3; stroke: var(--linea-fuerte); }
+  .seg--arranque .seg__etiqueta { fill: var(--tinta-suave); }
+
+  /* Tu código de init: lo único de la barra que puedes acortar. */
+  .seg--init rect { fill: #fbe3c4; stroke: #e0a341; }
+  .seg--init .seg__etiqueta { fill: #8a5606; }
+
+  /* El trabajo de verdad. */
+  .seg--handler rect { fill: #d6eadd; stroke: #8cbf9d; }
+  .seg--handler .seg__etiqueta { fill: #1f6b3c; }
+
+  .seg--espera rect { fill: none; stroke: var(--linea-fuerte); stroke-dasharray: 4 4; }
+  .seg--espera .seg__etiqueta { fill: var(--tinta-tenue); font-weight: 500; }
+</style>

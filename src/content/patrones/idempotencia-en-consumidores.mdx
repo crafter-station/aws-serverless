@@ -20,6 +20,12 @@ relacionados:
       El redrive reintenta, y cada reintento es otra ocasión de duplicar. Sin
       idempotencia, una DLQ bien configurada multiplica el daño en vez de
       contenerlo.
+  - patron: single-table-design
+    tipo: se combina con
+    porque: >-
+      Las claves de idempotencia pueden vivir en la tabla única detrás de un
+      prefijo. Es cómodo y mezcla ciclos de vida opuestos: un TTL agresivo
+      conviviendo con datos que no quieres perder.
   - patron: outbox-con-dynamodb-streams
     tipo: se combina con
     porque: >-
