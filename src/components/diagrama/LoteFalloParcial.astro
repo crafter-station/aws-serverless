@@ -1,0 +1,48 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const X = 176;
+const ANCHO = 44;
+
+// Un lote de diez registros; el cuarto revienta.
+const lote = (vuelven: (i: number) => boolean) =>
+  Array.from({ length: 10 }, (_, i) => ({
+    etiqueta: `${i + 1}`,
+    ancho: ANCHO,
+    tono: (i === 3 ? 'fallo' : vuelven(i) ? 'init' : 'handler') as
+      'fallo' | 'init' | 'handler',
+  }));
+---
+
+<Diagrama
+  ancho={700}
+  alto={392}
+  titulo="Un lote de diez registros en el que el cuarto falla, procesado de tres formas. Sin fallo parcial vuelven los diez. Con fallo parcial en SQS vuelve solo el cuarto. Con fallo parcial en un stream vuelven el cuarto y todos los posteriores, porque el identificador devuelto es un punto de control, no un filtro."
+  pie="<strong>La misma configuración significa dos cosas distintas.</strong> En SQS, <code>batchItemFailures</code> es una lista de mensajes que vuelven. En Kinesis y DynamoDB Streams es un <em>checkpoint</em>: Lambda toma el número de secuencia más bajo de la lista y reintenta desde ahí en adelante."
+>
+  <Barra
+    x={X} y={56} titulo="Sin fallo parcial"
+    sub="El lote entero se reintenta. Nueve registros buenos se reprocesan."
+    segmentos={lote(() => true)}
+  />
+
+  <Barra
+    x={X} y={168} titulo="Con fallo parcial · SQS"
+    sub="Vuelve solo el que falló. Los otros nueve se borran de la cola."
+    segmentos={lote(() => false)}
+  />
+
+  <Barra
+    x={X} y={280} titulo="Con fallo parcial · streams"
+    sub="Vuelven el que falló y todos los posteriores: es un punto de control."
+    segmentos={lote((i) => i > 3)}
+  />
+
+  <Etiqueta x={170} y={78} texto="lote de 10" ancla="end" />
+  <Etiqueta x={170} y={190} texto="lote de 10" ancla="end" />
+  <Etiqueta x={170} y={302} texto="lote de 10" ancla="end" />
+
+  <Etiqueta x={350} y={376} texto="Verde: procesado y descartado · Ámbar: se reintenta · Rojo: el que falló" />
+</Diagrama>

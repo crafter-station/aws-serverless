@@ -8,6 +8,11 @@ intencion: Desacoplar a quien pide el trabajo de quien lo hace con una única co
 verificado_en: "2026-09-06"
 servicios: [sqs, lambda]
 relacionados:
+  - patron: batching-y-fallo-parcial
+    tipo: se combina con
+    porque: >-
+      Es el ajuste que decide si un mensaje malformado arrastra a los otros nueve
+      del lote en cada reintento.
   - patron: fan-out
     tipo: compite con
     porque: >-

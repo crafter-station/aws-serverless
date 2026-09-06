@@ -1,0 +1,287 @@
+---
+titulo: Batching y fallo parcial
+alias: Partial batch response
+familia: Escala
+estado: listo
+dificultad: 2
+intencion: >-
+  Procesar mensajes en lotes para pagar menos invocaciones, sin que un solo
+  registro venenoso arrastre a los otros nueve en cada reintento.
+verificado_en: "2026-09-06"
+servicios: [lambda, sqs, kinesis, dynamodb]
+relacionados:
+  - patron: idempotencia-en-consumidores
+    tipo: requiere
+    porque: >-
+      AWS lo dice con todas las letras: los event source mappings procesan cada
+      evento al menos una vez. Y sin fallo parcial, un error reprocesa nueve
+      registros que ya habían funcionado.
+  - patron: dlq-y-redrive
+    tipo: se combina con
+    porque: >-
+      El fallo parcial aísla el mensaje venenoso; la DLQ es la que acaba
+      sacándolo del bucle cuando el problema no es transitorio.
+  - patron: cola-punto-a-punto
+    tipo: se combina con
+    porque: >-
+      Es la configuración por defecto de cualquier consumidor de SQS con Lambda,
+      y el sitio donde el ajuste importa desde el primer día.
+  - patron: fan-out
+    tipo: se combina con
+    porque: >-
+      Cada rama de un fan-out es un consumidor por lotes, y cada una necesita su
+      propio ajuste: el que manda emails no quiere el mismo tamaño de lote que
+      el que actualiza stock.
+---
+
+import LoteFalloParcial from '../../components/diagrama/LoteFalloParcial.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu función consume una cola y procesa diez mensajes por invocación. Es lo
+sensato: una invocación para diez mensajes cuesta la décima parte que diez
+invocaciones.
+
+Hasta que uno de los diez lleva un campo que tu código no espera y lanza una
+excepción.
+
+<LoteFalloParcial />
+
+Lo que ocurre por defecto está documentado sin ambigüedad: *"si tu función
+encuentra un error al procesar un lote, **todos los mensajes de ese lote vuelven
+a ser visibles** en la cola"*. Los nueve que funcionaron perfectamente vuelven a
+procesarse.
+
+Y no una vez: **en cada vuelta**. El mensaje venenoso sigue ahí, así que el ciclo
+se repite hasta agotar `maxReceiveCount` o la retención. Cada vuelta son nueve
+efectos duplicados —nueve emails, nueve cobros— más una invocación que pagas.
+
+En **streams** —Kinesis y DynamoDB Streams— es peor, porque ahí el orden importa
+y AWS lo protege: *"para asegurar el procesamiento en orden, el event source
+mapping **pausa el procesamiento del shard afectado** hasta que el error se
+resuelve"*. Un solo registro malo **bloquea el shard entero**.
+
+<Caja tipo="clave">
+El lote es una unidad de facturación, no una unidad de trabajo. Lambda, por
+defecto, los confunde: o el lote entero triunfa, o el lote entero se reintenta.
+</Caja>
+
+## La solución
+
+Decirle a Lambda **qué falló exactamente**, en vez de dejar que lo deduzca de una
+excepción.
+
+Se activa incluyendo `ReportBatchItemFailures` en la lista `FunctionResponseTypes`
+del event source mapping, y devolviendo desde el handler:
+
+```json
+{ "batchItemFailures": [ { "itemIdentifier": "<id>" } ] }
+```
+
+La documentación es tajante sobre el primer paso, y es donde falla mucha gente:
+*"aunque tu código devuelva respuestas de fallo parcial, Lambda **no las procesa**
+salvo que `ReportBatchItemFailures` esté explícitamente activado"*. Sin esa
+casilla, tu return es un objeto que nadie lee.
+
+### Y ahora lo importante: no significa lo mismo en los dos sitios
+
+En **SQS**, `batchItemFailures` es lo que parece: la lista de mensajes que vuelven
+a la cola. El resto se borra.
+
+En **streams**, es un **punto de control**. Cita literal: *"si el array
+`batchItemFailures` contiene varios elementos, Lambda usa el registro con el
+**número de secuencia más bajo** como checkpoint. Después reintenta todos los
+registros a partir de ese punto"*.
+
+Es decir: en un stream no puedes saltarte el registro 4 y quedarte con el 5 al
+10. Devolver el 4 significa **reintentar del 4 al 10**. Tiene sentido —el orden
+es la razón de ser de un stream— pero contradice frontalmente la intuición que
+uno trae de SQS, y es el origen de duplicados que nadie se explica.
+
+## Cuándo usarlo
+
+- **Siempre que uses lotes.** No hay un caso razonable en el que quieras que
+  nueve mensajes buenos se reprocesen por culpa de uno.
+- En cuanto el consumidor tenga **efectos observables**: cobrar, enviar,
+  escribir.
+- En streams, además, para que un registro venenoso **no bloquee el shard**.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **El lote es de uno.** Con `BatchSize: 1` no hay nada que aislar, aunque
+  entonces estás pagando una invocación por mensaje.
+- **El lote es una unidad transaccional de verdad.** Si procesas los diez
+  registros como un bloque que se escribe de una vez, un fallo parcial deja el
+  bloque a medias. Ahí querías fallar entero — pero dilo en el código, no lo
+  dejes en el comportamiento por defecto.
+- **Prefieres bisección.** `BisectBatchOnFunctionError` parte el lote en dos y
+  reintenta cada mitad, acorralando al registro malo sin que tu código diga
+  nada. Es más lento y más caro, pero no exige tocar el handler.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Activa `ReportBatchItemFailures`** en el event source mapping. Sin esto, lo
+   demás no sirve de nada.
+2. **Captura por registro, no por lote.** Un `try` alrededor del bucle entero es
+   exactamente lo que estás intentando evitar.
+3. **Devuelve el identificador correcto**: `messageId` en SQS, número de
+   secuencia en streams.
+4. **En streams, devuelve el primero que falló y corta.** Como el resto se va a
+   reintentar igualmente, seguir procesando es trabajo que se tirará.
+5. **Ajusta el tamaño de lote a la duración** de tu función, y recuerda que hay
+   un techo de payload de 6 MB que no se puede tocar.
+6. **Idempotencia**, siempre: la entrega es al menos una vez y los reintentos
+   son parte del diseño.
+7. **DLQ detrás**, para que el venenoso acabe saliendo del bucle.
+
+## El código
+
+```ts
+// ── SQS: batchItemFailures es una lista de mensajes que vuelven ─────
+export const consumir = async (e: SQSEvent): Promise<SQSBatchResponse> => {
+  const fallidos: { itemIdentifier: string }[] = [];
+
+  for (const r of e.Records) {
+    try {
+      await procesar(JSON.parse(r.body));
+    } catch {
+      // Solo este vuelve a la cola. Los demas se borran.
+      fallidos.push({ itemIdentifier: r.messageId });
+    }
+  }
+
+  return { batchItemFailures: fallidos };
+};
+```
+
+```ts
+// ── Streams: batchItemFailures es un CHECKPOINT ─────────────────────
+// Devolver el registro 4 significa reintentar del 4 al 10. Por eso, en
+// cuanto uno falla, se devuelve y se corta: seguir procesando los
+// posteriores es trabajo que se va a tirar.
+export const consumirStream = async (
+  e: DynamoDBStreamEvent,
+): Promise<DynamoDBBatchResponse> => {
+  for (const r of e.Records) {
+    try {
+      await procesar(r);
+    } catch {
+      return { batchItemFailures: [{ itemIdentifier: r.dynamodb!.SequenceNumber! }] };
+    }
+  }
+
+  // Lista vacia = lote completo correcto.
+  return { batchItemFailures: [] };
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · Una clave mal escrita falla el lote entero">
+Esta es la más cruel, porque el síntoma es exactamente el problema que creías
+haber resuelto. La documentación enumera cuándo Lambda considera el lote un
+**fallo completo**:
+
+- un `itemIdentifier` que sea **cadena vacía**
+- un `itemIdentifier` **nulo**
+- un `itemIdentifier` **con el nombre de clave mal puesto**
+
+Es decir: escribir `ItemIdentifier` con mayúscula, o `messageId`, o dejar el
+campo vacío porque el registro no traía número de secuencia, hace que **los diez
+mensajes vuelvan**. Tu código está reportando fallos parciales y Lambda está
+reintentando el lote completo, sin que nada avise.
+
+Y el reverso, para que no haya dudas: Lambda considera el lote un **éxito
+completo** si devuelves una lista vacía, una lista nula, un objeto de respuesta
+vacío o nulo. Un `return` olvidado marca los diez como procesados.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · En streams no es un filtro, es un checkpoint">
+Ya está dicho arriba pero merece su sitio: devolver los identificadores 4 y 8 no
+reintenta el 4 y el 8. **Reintenta del 4 al 10**, porque Lambda toma el número
+de secuencia más bajo como punto de control.
+
+La consecuencia práctica es que los registros del 5 al 10 se procesarán **dos
+veces** aunque hayan ido bien la primera. Si esos registros tienen efectos, esto
+no es un detalle: es la razón por la que la idempotencia deja de ser opcional.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Un venenoso bloquea el shard">
+En Kinesis y DynamoDB Streams, para preservar el orden, el event source mapping
+**pausa el shard afectado** hasta que el error se resuelva. No es que un registro
+se retrase: es que **todo lo que viene detrás en ese shard deja de procesarse**.
+
+El síntoma es `IteratorAge` creciendo sin parar mientras el resto del sistema
+parece sano. Sin fallo parcial y sin un máximo de reintentos configurado, un
+único registro malformado puede detener una partición entera durante horas.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · La ventana de agrupación tiene letra pequeña">
+Dos sorpresas documentadas:
+
+Con una **ventana de agrupación configurada y una cola de poco tráfico, Lambda
+puede esperar hasta 20 segundos** antes de invocar — aunque hayas puesto una
+ventana menor.
+
+Y en las fuentes cuya ventana por defecto son 500 ms (Kafka, Amazon MQ,
+DocumentDB), **una vez la cambias no puedes volver atrás**: solo se configura en
+incrementos de segundos, así que recuperar los 500 ms exige **crear un event
+source mapping nuevo**.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · El lote se corta a 6 MB, y ese techo no se toca">
+Lambda invoca cuando se cumple lo primero de tres cosas: se agota la ventana, se
+alcanza el tamaño de lote, o **el payload llega a 6 MB**. Ese último no se puede
+modificar.
+
+Así que un `BatchSize` de 100 con mensajes de 200 KB nunca va a ver cien
+mensajes: verá unos treinta. Si dimensionaste el consumidor contando con lotes
+llenos, tus números están mal.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · Los reintentos por throttling no cuentan">
+En fuentes de stream puedes limitar cuántas veces reintenta Lambda. Pero la
+documentación aclara que **los errores de servicio y los throttles en los que el
+lote no llega a tu función no cuentan** como intentos.
+
+Es razonable —no fallaste tú— y a la vez significa que un throttling sostenido
+no consume el contador: el lote sigue ahí, esperando, sin acercarse nunca al
+destino de descarte.
+</Caja>
+
+## Coste
+
+| Configuración | Efecto |
+| --- | --- |
+| `BatchSize: 1` | una invocación por mensaje — el más caro |
+| `BatchSize: 10` (por defecto en SQS) | una invocación por cada diez |
+| Sin fallo parcial, con un venenoso | **× reintentos**, sobre el lote entero |
+| Con fallo parcial | el lote bueno se paga una vez |
+
+El batching es de las optimizaciones más rentables que existen en Lambda: pasar
+de 1 a 10 divide entre diez las invocaciones y buena parte del arranque
+amortizado. Lo que casi nadie calcula es el **coste del camino de fallo**: sin
+fallo parcial, un solo mensaje malformado en un lote de diez multiplica por el
+número de reintentos el coste de procesar los otros nueve — y añade sus efectos
+duplicados, que suelen costar más que la factura.
+
+Dicho de otro modo: **el batching ahorra en el camino feliz y el fallo parcial
+evita que el camino infeliz se lo coma**.
+
+## Fuentes
+
+Comportamiento por defecto ante un error, pausa del shard para preservar el
+orden, entrega al menos una vez, ventana de agrupación y su irreversibilidad en
+las fuentes de 500 ms, techo de payload de 6 MB, y que los throttles no cuentan
+como reintentos:
+[How Lambda processes records from stream and queue-based event sources](https://docs.aws.amazon.com/lambda/latest/dg/invocation-eventsourcemapping.html).
+Activación mediante `FunctionResponseTypes`, sintaxis de la respuesta, semántica
+de checkpoint por número de secuencia más bajo, condiciones exactas de éxito y
+de fallo completo, y bisección del lote:
+[Configuring partial batch response with DynamoDB and Lambda](https://docs.aws.amazon.com/lambda/latest/dg/services-ddb-batchfailurereporting.html).
+Comportamiento de los mensajes y la espera de hasta 20 segundos con colas de
+poco tráfico:
+[Using Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html).

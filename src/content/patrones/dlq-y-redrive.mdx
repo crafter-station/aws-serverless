@@ -8,6 +8,11 @@ intencion: Apartar los mensajes que fallan una y otra vez para que dejen de bloq
 verificado_en: "2026-09-06"
 servicios: [sqs, sns, lambda]
 relacionados:
+  - patron: batching-y-fallo-parcial
+    tipo: se combina con
+    porque: >-
+      El fallo parcial aísla al mensaje venenoso para que no arrastre al lote; la
+      DLQ es la que acaba sacándolo del bucle.
   - patron: fan-out
     tipo: se combina con
     porque: >-

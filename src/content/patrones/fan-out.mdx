@@ -8,6 +8,11 @@ intencion: Un productor emite un hecho una sola vez y varios consumidores indepe
 verificado_en: "2026-09-06"
 servicios: [sns, sqs, lambda, eventbridge]
 relacionados:
+  - patron: batching-y-fallo-parcial
+    tipo: se combina con
+    porque: >-
+      Cada rama es un consumidor por lotes con su propio ajuste: el que manda
+      emails no quiere el mismo tamaño de lote que el que actualiza stock.
   - patron: idempotencia-en-consumidores
     tipo: requiere
     porque: >-

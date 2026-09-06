@@ -8,7 +8,7 @@ interface Segmento {
   etiqueta: string;
   /** Anchura en unidades del lienzo. La escala la decide el diagrama. */
   ancho: number;
-  tono?: 'arranque' | 'init' | 'handler' | 'espera';
+  tono?: 'arranque' | 'init' | 'handler' | 'espera' | 'fallo';
 }
 
 interface Props {
@@ -72,4 +72,8 @@ const total = cursor - x;
 
   .seg--espera rect { fill: none; stroke: var(--linea-fuerte); stroke-dasharray: 4 4; }
   .seg--espera .seg__etiqueta { fill: var(--tinta-tenue); font-weight: 500; }
+
+  /* El registro que revienta. */
+  .seg--fallo rect { fill: #f7d7d7; stroke: var(--peligro); }
+  .seg--fallo .seg__etiqueta { fill: var(--peligro); }
 </style>

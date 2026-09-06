@@ -117,7 +117,11 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
 - [x] 5a. Servicios de v1 completos: 6 de 6
 - [x] 5b. Patrones de v1 completos: 8 de 8
 - [x] 7. Catálogo de patrones completo: 14 de 14, y el grafo cerrado
-- [ ] 8. Servicios de las familias que faltan (Kinesis, Cognito, CloudFront, CloudWatch)
+- [x] 8. Servicios de las familias que faltaban: Kinesis, CloudWatch, CloudFront,
+      Cognito y Route 53. **13 servicios.**
+- [ ] 9. Seguir ensanchando el catálogo de patrones hacia los ~34 propuestos.
+      Los 14 primeros están cerrados y el grafo es mutuo; cada patrón nuevo
+      añade sus recíprocos.
 - [x] 6. Umbral de mostrar alcanzado: 4 servicios + 3 patrones
 
 ### Lo que el sistema resultó ser
