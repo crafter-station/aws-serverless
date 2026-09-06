@@ -1,0 +1,33 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+
+const FILAS = [44, 160, 276];
+const MENSAJES = ['mensaje A', 'mensaje B', 'mensaje C'];
+---
+
+<Diagrama
+  ancho={700}
+  alto={392}
+  titulo="Un productor deposita mensajes en una única cola SQS que consumen tres instancias de la misma función. Cada mensaje lo recibe exactamente un consumidor: la cola reparte el trabajo, no lo duplica."
+  pie="<strong>Una cola reparte; no duplica.</strong> Tres consumidores sobre la misma cola son tres obreros turnándose, no tres suscriptores. Si lo que querías era que los tres vieran <em>todos</em> los mensajes, esto no es una cola: es un fan-out."
+>
+  <Nodo x={30}  y={160} icono="aws-lambda" titulo="productor" />
+  <Nodo x={216} y={160} icono="amazon-simple-queue-service" titulo="SQS" sub="una sola cola" />
+
+  <Marco x={392} y={16} ancho={290} alto={344} etiqueta="La misma función, en paralelo" />
+
+  {FILAS.map((y, i) => (
+    <Fragment>
+      <Nodo x={476} y={y} icono="aws-lambda" titulo={`procesar #${i + 1}`} />
+      <Flecha de={[272, 180]} a={[474, y + 26]} curva={i === 1 ? 0 : (i === 0 ? -14 : 14)} etiqueta={MENSAJES[i]} ey={i === 2 ? 22 : -11} />
+    </Fragment>
+  ))}
+
+  <Flecha de={[84, 186]} a={[214, 186]} />
+
+  <Etiqueta x={350} y={382} texto="Cada mensaje lo recibe uno solo · para escalar se añaden consumidores, no colas" />
+</Diagrama>

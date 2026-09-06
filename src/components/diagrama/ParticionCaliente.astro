@@ -1,0 +1,45 @@
+---
+import Diagrama from './Diagrama.astro';
+import Barra from './Barra.astro';
+import Etiqueta from './Etiqueta.astro';
+
+// Escala: 1 escritura/s ≈ 0,105 px. El techo de la partición son 1 000/s.
+const X = 150;
+const TECHO = 105;
+const SUFIJOS = 10;
+---
+
+<Diagrama
+  ancho={700}
+  alto={318}
+  titulo="Comparación del reparto de escrituras. Con una sola clave de partición, las 4 000 escrituras por segundo caen en la misma partición y superan cuatro veces su techo de 1 000. Repartidas en diez sufijos, cada clave recibe 400 y ninguna se acerca al límite."
+  pie="<strong>El techo de la partición no se amplía: se esquiva.</strong> Son 1 000 unidades de escritura por segundo y no hay ticket que lo suba. La única palanca es repartir las escrituras entre más valores de clave."
+>
+  <Barra
+    x={X} y={58} titulo="Una sola clave"
+    sub="4 000 escrituras/s contra un techo de 1 000 · ProvisionedThroughputExceededException"
+    segmentos={[{ etiqueta: 'PEDIDOS#2026-09-06', ancho: 420, tono: 'init' }]}
+  />
+
+  <Barra
+    x={X} y={166} titulo="Diez sufijos"
+    sub="400 escrituras/s por clave · el ancho de cada bloque es su carga, y ninguno llega al techo"
+    segmentos={Array.from({ length: SUFIJOS }, (_, i) => ({
+      etiqueta: `.${i + 1}`,
+      ancho: 42,
+      tono: 'handler' as const,
+    }))}
+  />
+
+  {/* La línea del techo solo cruza la primera barra: en la segunda, el eje X
+      son diez claves distintas y la carga de cada una es su ANCHO, no su
+      posición. Extenderla hasta abajo insinuaría que el tercer sufijo se pasa. */}
+  <path d={`M${X + TECHO},44 L${X + TECHO},112`} class="techo" />
+  <Etiqueta x={X + TECHO + 6} y={40} texto="techo de una partición · 1 000/s" estilo="peligro" ancla="start" />
+
+  <Etiqueta x={350} y={300} texto="Precio a pagar: leer un día completo exige consultar los diez sufijos y unir los resultados" />
+</Diagrama>
+
+<style>
+  .techo { stroke: var(--peligro); stroke-width: 1.5; stroke-dasharray: 4 4; fill: none; }
+</style>

@@ -1,7 +1,255 @@
 ---
 titulo: Cola punto a punto
+alias: Point-to-point channel / competing consumers
 familia: Comunicación
-estado: esbozo
+estado: listo
+dificultad: 1
+intencion: Desacoplar a quien pide el trabajo de quien lo hace con una única cola, de forma que el pico se absorba, el trabajo se reparta y añadir capacidad sea añadir consumidores.
+verificado_en: "2026-09-06"
+servicios: [sqs, lambda]
+relacionados:
+  - patron: fan-out
+    tipo: compite con
+    porque: >-
+      Una cola reparte y un topic duplica. Con un solo consumidor, SNS delante
+      es una pieza que mantener a cambio de nada; con varios que necesitan
+      *todos* los mensajes, la cola sola no sirve.
+  - patron: dlq-y-redrive
+    tipo: se combina con
+    porque: >-
+      No hay un caso razonable en el que quieras reintentos infinitos. Toda cola
+      punto a punto necesita su redrive policy y su alarma.
 ---
 
-Por escribir.
+import ColaReparte from '../../components/diagrama/ColaReparte.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu API recibe una petición que dispara un trabajo lento: generar un informe,
+redimensionar un vídeo, llamar a un ERP que tarda ocho segundos.
+
+Hacerlo en la misma invocación tiene tres problemas simultáneos:
+
+- **El cliente espera** lo que tarde el trabajo, y corre contra el timeout de
+  integración de API Gateway.
+- **El pico se propaga.** Si llegan mil peticiones en diez segundos, se lanzan
+  mil invocaciones a la vez — y si detrás hay una base de datos o un tercero con
+  cuota, se lo comen entero.
+- **Un fallo pierde el trabajo.** Si el ERP está caído, la petición se pierde y
+  el cliente tiene que volver a intentarlo.
+
+Llamar directamente a otra Lambda no arregla nada: sigue sin haber sitio donde
+el trabajo espere.
+
+<Caja tipo="clave">
+Lo que falta no es más capacidad: es **un sitio donde el trabajo pueda esperar**.
+Eso es una cola, y es la pieza más simple y más infravalorada de todo el
+catálogo.
+</Caja>
+
+## La solución
+
+Una cola entre quien pide y quien hace.
+
+<ColaReparte />
+
+El productor deposita el mensaje y responde `202` en milisegundos. Uno o varios
+consumidores lo recogen al ritmo que puedan. Y aquí está la propiedad que define
+el patrón y que se confunde constantemente:
+
+> **Una cola reparte; no duplica.** Cada mensaje lo recibe **un solo**
+> consumidor.
+
+Tres funciones consumiendo la misma cola no son tres suscriptores: son tres
+obreros turnándose. Por eso el patrón también se llama *competing consumers*, y
+por eso escalar es simplemente **añadir consumidores, no colas**.
+
+Lo que ganas:
+
+- **La cola absorbe el pico.** Mil mensajes en diez segundos entran sin
+  despeinarse; el backlog de una cola no tiene techo.
+- **El ritmo lo marcas tú.** Con concurrencia reservada en el consumidor decides
+  a qué velocidad se drena, protegiendo lo que hay detrás.
+- **Nada se pierde.** Si el consumidor está caído, el mensaje espera — hasta 14
+  días si lo configuras.
+
+## Cuándo usarlo
+
+- El trabajo es **lento** y el cliente no necesita el resultado para seguir.
+- El tráfico llega **a golpes** y lo de detrás no escala igual de rápido.
+- Quieres **reintentos gratis**: una cola con DLQ te los da sin escribir un
+  bucle.
+- Hay **un consumidor lógico** del mensaje, aunque corran diez instancias suyas.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Varios consumidores distintos necesitan el mismo mensaje.** La cola se lo
+  dará a uno solo. Dos servicios compartiendo cola se roban el trabajo entre
+  ellos. Eso es un fan-out: SNS o EventBridge delante, y una cola para cada uno.
+- **El cliente necesita la respuesta.** Montar request-reply sobre colas se
+  puede, pero si alguien está esperando, casi siempre querías una llamada
+  síncrona.
+- **Necesitas orden estricto.** Las colas estándar avisan de que los mensajes
+  *"pueden llegar desordenados"*. FIFO lo garantiza a cambio de mucho menos
+  throughput.
+- **Necesitas releer lo que ya pasó.** Un mensaje borrado no existe. Eso es
+  Kinesis.
+- **La espera pasa de 15 minutos.** El retraso máximo de un mensaje son 15
+  minutos; para "dentro de tres días", EventBridge Scheduler o Step Functions.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Crea la DLQ antes que la cola** y dale más retención que a la de origen.
+2. **`maxReceiveCount` entre 3 y 5.**
+3. **Visibility timeout cómodamente por encima** del timeout del consumidor —no
+   ajustado— para que un proceso lento no genere duplicados.
+4. **Long polling a 20 segundos**: menos respuestas vacías, menos latencia y
+   menos factura.
+5. **`reportBatchItemFailures` activado**, siempre.
+6. **Consumidor idempotente**: la entrega es al menos una vez.
+7. **Concurrencia reservada en el consumidor** si detrás hay algo que no escala.
+8. **Alarmas** sobre la profundidad de la cola, la edad del mensaje más antiguo
+   y la DLQ.
+
+## El código
+
+```ts
+// ── Productor: deposita y responde. No espera a nadie. ─────────────
+export const pedirInforme = async (evento: APIGatewayProxyEventV2) => {
+  const id = crypto.randomUUID();
+
+  await sqs.send(new SendMessageCommand({
+    QueueUrl: process.env.COLA,
+    MessageBody: JSON.stringify({ id, ...JSON.parse(evento.body!) }),
+  }));
+
+  // 202: aceptado, todavia no hecho. El cliente consulta luego por id.
+  return { statusCode: 202, body: JSON.stringify({ id }) };
+};
+```
+
+```ts
+// ── Consumidor: uno de varios, compitiendo por los mensajes ────────
+export const generarInforme = async (e: SQSEvent): Promise<SQSBatchResponse> => {
+  const fallidos: { itemIdentifier: string }[] = [];
+
+  for (const r of e.Records) {
+    const trabajo = JSON.parse(r.body);
+    try {
+      // Al menos una vez: este mensaje puede llegar dos veces.
+      if (await yaGenerado(trabajo.id)) continue;
+      await generar(trabajo);
+    } catch {
+      // Solo este vuelve a la cola; los otros nueve del lote no.
+      fallidos.push({ itemIdentifier: r.messageId });
+    }
+  }
+
+  return { batchItemFailures: fallidos };
+};
+```
+
+```ts
+// ── Infraestructura ────────────────────────────────────────────────
+const dlq = new sqs.Queue(this, 'InformesDlq', {
+  retentionPeriod: cdk.Duration.days(14), // mas que la de origen
+});
+
+const cola = new sqs.Queue(this, 'Informes', {
+  retentionPeriod: cdk.Duration.days(4),
+  visibilityTimeout: cdk.Duration.minutes(6), // holgado sobre el timeout
+  deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },
+});
+
+consumidor.addEventSource(new SqsEventSource(cola, {
+  batchSize: 10,
+  reportBatchItemFailures: true,
+}));
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · Dos servicios distintos compartiendo cola">
+Es el error conceptual del patrón, y produce un fallo desconcertante: dos
+servicios se suscriben a la misma cola y **cada uno procesa la mitad de los
+mensajes, al azar**. Ninguno falla, ninguno lanza un error, y los dos tienen
+datos incompletos.
+
+Una cola es un canal punto a punto. Si dos consumidores lógicos necesitan
+enterarse de todo, cada uno necesita **su propia cola**, y delante un topic o un
+bus que las alimente.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · El visibility timeout más corto que el proceso">
+Ya sale en la ficha de SQS y se repite aquí porque es el error número uno: si tu
+función tarda 45 segundos y el timeout son 30, el mensaje reaparece y un segundo
+consumidor empieza mientras el primero sigue vivo. Dos informes, dos cobros, dos
+de lo que sea.
+
+Y hay un efecto secundario: cada reaparición cuenta como una recepción, así que
+`maxReceiveCount` se agota y el mensaje acaba en la DLQ **sin que nada haya
+fallado**.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Encolar no es procesar">
+Devolver `202` es honesto solo si alguien puede saber después qué pasó. Sin un
+registro del estado del trabajo, el cliente no tiene forma de distinguir entre
+"en cola", "hecho" y "en la DLQ desde ayer".
+
+Escribe el estado en algún sitio —DynamoDB suele bastar— antes de encolar, y
+actualízalo al terminar. Si no, la cola se convierte en un agujero por el que se
+tira trabajo con la esperanza de que alguien lo recoja.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Escalar a base de colas">
+Cuando el backlog crece, la tentación es crear una segunda cola y repartir. Casi
+nunca es la respuesta: para procesar más rápido se aumenta la **concurrencia del
+consumidor**, no el número de colas.
+
+Más colas significa más DLQ, más alarmas y más lógica de reparto en el
+productor. Se justifica cuando hace falta aislar por prioridad o por tenant, no
+para ir más rápido.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · El techo de mensajes en vuelo">
+Unos **120 000** en colas estándar. No se llega procesando rápido: se llega
+cuando los consumidores no dan abasto y todo se queda recibido y sin borrar. Con
+short polling, SQS devuelve `OverLimit`; con long polling, ni siquiera hay
+error.
+
+Es la señal de que el consumidor va más lento que el productor, y ninguna
+cantidad de cola lo arregla.
+</Caja>
+
+## Coste
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| Peticiones de SQS estándar | ~0,40 USD / millón |
+| Primer millón al mes | gratis |
+| Almacenar mensajes | sin coste |
+| Invocaciones del consumidor | las normales de Lambda |
+
+La cola es de las piezas más baratas de AWS: no cobra por existir ni por guardar,
+solo por peticiones. Dos cosas mueven la factura más que el precio unitario:
+
+**Los lotes.** Diez mensajes en una llamada son una petición, no diez. Si
+controlas el productor, batear es la optimización más rentable del patrón.
+
+**El sondeo vacío.** Una cola ociosa conectada a Lambda genera `ReceiveMessage`
+las veinticuatro horas. Long polling a 20 segundos reduce ese goteo a la
+vigésima parte de lo que costaría sondeando cada segundo.
+
+## Fuentes
+
+Garantías de entrega, desorden y comportamiento de las colas estándar:
+[Amazon SQS standard queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html).
+Visibility timeout, retención, retraso máximo, tamaño de lote y long polling:
+[Amazon SQS message quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html).
+Mensajes en vuelo y comportamiento con short polling:
+[Amazon SQS standard queue quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-queues.html).
+Regla de facturación por porciones de 64 KB:
+[SQS pricing](https://aws.amazon.com/sqs/pricing/).

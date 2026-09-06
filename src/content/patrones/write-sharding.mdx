@@ -1,7 +1,240 @@
 ---
 titulo: Write sharding
+alias: Write sharding
 familia: Datos
-estado: esbozo
+estado: listo
+dificultad: 3
+intencion: Repartir las escrituras de una clave muy caliente entre varias claves sintéticas, para dejar de chocar contra el techo de una sola partición de DynamoDB.
+verificado_en: "2026-09-06"
+servicios: [dynamodb, lambda]
+relacionados:
+  - patron: single-table-design
+    tipo: se combina con
+    porque: >-
+      Single-table agrupa a propósito bajo pocas claves para que una Query
+      devuelva todo de golpe. Eso concentra tráfico por diseño, y cuando una de
+      esas claves se calienta, el sharding es la salida.
 ---
 
-Por escribir.
+import ParticionCaliente from '../../components/diagrama/ParticionCaliente.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu tabla está en modo bajo demanda, la gráfica de consumo total va holgada, y
+aun así DynamoDB empieza a devolver `ProvisionedThroughputExceededException`.
+
+No es un error de configuración ni una cuota de cuenta. Es que **el techo que
+estás tocando no es el de la tabla: es el de una partición**.
+
+<ParticionCaliente />
+
+Cada partición de DynamoDB está diseñada para dar como máximo **3 000 unidades
+de lectura y 1 000 de escritura por segundo**. Y como la partición se decide
+pasando la partition key por una función hash, **todos los elementos con la
+misma clave viven en el mismo sitio físico** y comparten ese techo.
+
+Así que basta con una clave popular para agotarlo mientras el resto de la tabla
+está ociosa. Los sospechosos habituales son siempre los mismos:
+
+- Una **fecha**: `PEDIDOS#2026-09-06` recibe el 100 % de las escrituras del día.
+- Un **tenant grande**: `TENANT#acme` es el 80 % de tu tráfico.
+- Un **contador global**: `CONTADOR#visitas`, una sola clave para todo.
+- Un **estado**: `ESTADO#pendiente`, donde caen todos los pedidos nuevos.
+
+<Caja tipo="clave">
+Este límite **no se amplía con un ticket**. La capacidad por tabla sí —40 000
+unidades, y se pide—. La de una partición, no. La única palanca es **repartir
+las escrituras entre más valores de clave**.
+</Caja>
+
+## La solución
+
+Ampliar el espacio de claves añadiendo un sufijo. AWS describe dos formas, y la
+diferencia entre ellas decide si podrás volver a leer un elemento concreto.
+
+### Sufijo aleatorio
+
+Al escribir, eliges un número al azar entre 1 y N y lo concatenas: la clave
+`2026-09-06` se convierte en `2026-09-06.1`, `2026-09-06.2`, y así hasta
+`2026-09-06.200`. Las escrituras se reparten solas y el throughput se multiplica
+por N.
+
+El precio: **no sabes en qué sufijo quedó un elemento concreto**. Para leerlo,
+tendrías que consultar los N.
+
+### Sufijo calculado
+
+En vez de un número al azar, se calcula a partir de algo por lo que ya vas a
+consultar. Si tus elementos tienen un `OrderId`, el sufijo sale de una función
+determinista sobre él — AWS propone algo tan simple como *el producto de los
+puntos de código UTF-8 del identificador, módulo 200, más 1*.
+
+El reparto es igual de bueno, y además **puedes reconstruir la clave**: dado un
+`OrderId`, recalculas el sufijo y haces un `GetItem` directo.
+
+Lo que **no** cambia entre las dos estrategias: para leer *todos* los elementos
+de un día sigues teniendo que consultar los N sufijos y unir los resultados en
+tu código.
+
+## Cuándo usarlo
+
+- Ya has **medido** que el problema es una clave concreta, no el volumen total.
+- El acceso está **concentrado por diseño**: fecha, tenant, estado, contador.
+- Las escrituras dominan. Para lecturas calientes, un caché —DAX o
+  ElastiCache— suele salir mejor que reestructurar las claves.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **No lo has medido.** Contributor Insights te dice qué claves consumen más.
+  Repartir sin saber cuál es la caliente añade complejidad permanente para
+  resolver un problema que quizá no tienes.
+- **Tu clave ya está bien distribuida.** Si la partition key es un
+  identificador de usuario o de pedido con buena cardinalidad, el sharding
+  sobra: ya estás repartido.
+- **Necesitas leer el conjunto completo a menudo.** Si la consulta dominante es
+  "todo lo de hoy", el sharding la convierte en N consultas y una unión en
+  memoria. Puede que la salida sea reordenar el modelo, no trocearlo.
+- **Es una serie temporal pura.** AWS remite a una estrategia específica para
+  datos de series temporales de alto volumen: una tabla por periodo. A menudo
+  es mejor que el sharding.
+- **El problema es de lectura.** El techo de lectura son 3 000 unidades, tres
+  veces el de escritura, y un caché delante suele bastar.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Identifica la clave caliente** con Contributor Insights y con la métrica de
+   peticiones estranguladas.
+2. **Elige N** con margen: escrituras por segundo previstas dividido entre 1 000,
+   por un factor de holgura. Con 4 000/s, diez sufijos dejan 400 por clave.
+3. **Decide la estrategia**: calculado si necesitas leer elementos sueltos;
+   aleatorio si solo escribes y lees por lotes.
+4. **Encapsula el cálculo del sufijo en una función** y no lo repitas por ahí:
+   el día que cambie N, tiene que cambiar en un solo sitio.
+5. **Escribe también la lectura por lotes** —consultar los N y unir— porque
+   alguien la va a necesitar.
+6. **Documenta N junto al modelo.** Sin ese número, la tabla es ilegible.
+
+## El código
+
+```ts
+const SUFIJOS = 10;
+
+// Calculado, no aleatorio: dado el pedido podemos volver a encontrarlo.
+// La formula es la que sugiere AWS — suma de puntos de codigo, modulo N.
+const sufijo = (id: string) =>
+  ([...id].reduce((a, c) => a + c.codePointAt(0)!, 0) % SUFIJOS) + 1;
+
+const claveDe = (fecha: string, pedidoId: string) =>
+  `PEDIDOS#${fecha}.${sufijo(pedidoId)}`;
+
+// ── Escribir: reparte solo ─────────────────────────────────────────
+await ddb.send(new PutCommand({
+  TableName: 'app',
+  Item: { PK: claveDe(fecha, pedido.id), SK: `PEDIDO#${pedido.id}`, ...pedido },
+}));
+
+// ── Leer uno: la clave se reconstruye ──────────────────────────────
+const uno = await ddb.send(new GetCommand({
+  TableName: 'app',
+  Key: { PK: claveDe(fecha, pedidoId), SK: `PEDIDO#${pedidoId}` },
+}));
+
+// ── Leer el dia entero: N consultas y una union ────────────────────
+// Este es el precio del patron, y conviene tenerlo escrito una sola vez.
+const dia = async (fecha: string) => {
+  const partes = await Promise.all(
+    Array.from({ length: SUFIJOS }, (_, i) =>
+      ddb.send(new QueryCommand({
+        TableName: 'app',
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': `PEDIDOS#${fecha}.${i + 1}` },
+      })),
+    ),
+  );
+  return partes.flatMap((p) => p.Items ?? []);
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · N es para siempre">
+Cambiar el número de sufijos **no es un cambio de configuración**: los elementos
+ya escritos tienen la clave que tenían. Si pasas de 10 a 50, los antiguos siguen
+repartidos entre 10 y la función de lectura tiene que consultar los 50 para no
+perderse nada — o migrar la tabla.
+
+Elige N con margen desde el principio. Es más barato tener veinte sufijos poco
+llenos que descubrir a los seis meses que diez se quedan cortos.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · Las lecturas se multiplican, y se pagan">
+Leer un día completo pasa de una `Query` a N. Con veinte sufijos son veinte
+consultas, veinte respuestas paginadas y una unión en memoria de tu Lambda.
+
+Has cambiado un problema de escritura por uno de lectura, y si la consulta del
+día completo es frecuente, puede que hayas perdido en el cambio. Mídelo antes,
+no después.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · El orden desaparece">
+Dentro de una partición, los elementos están ordenados por sort key y una
+`Query` los devuelve así, gratis. Al repartir en N claves, cada consulta viene
+ordenada por su cuenta y **el orden global lo tienes que reconstruir tú**.
+
+Si además paginas, ordenar el conjunto completo obliga a traer todas las páginas
+de todos los sufijos antes de poder devolver la primera. Es el coste que menos
+se anticipa.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · El sufijo aleatorio te deja sin GetItem">
+Con sufijo aleatorio no puedes leer un elemento concreto: no sabes dónde quedó.
+Si algún día alguien pregunta "tráeme el pedido 4711", la respuesta es consultar
+los N sufijos, y eso es una operación cara para algo que debería ser una lectura
+directa.
+
+Usa aleatorio solo si estás seguro de que nunca vas a necesitar leer por
+identificador. En la duda, calculado.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · El problema puede ser un elemento, no una clave">
+El sharding reparte entre valores de clave distintos. Si tu clave caliente es
+**un solo elemento** —un contador que todo el mundo incrementa— repartirlo entre
+sufijos significa tener N contadores y sumarlos al leer.
+
+Funciona, pero deja de ser un contador exacto y consistente. Si necesitabas
+exactitud, la respuesta probablemente no era DynamoDB para ese dato concreto.
+</Caja>
+
+## Coste
+
+| Concepto | Efecto |
+| --- | --- |
+| Escrituras | **igual** — el mismo número de elementos, repartidos |
+| Lectura de un elemento | igual, con sufijo calculado |
+| Lectura del conjunto | **× N** consultas |
+| Almacenamiento | igual |
+| Complejidad del modelo | **sube**, y es permanente |
+
+El sharding **no cuesta más en escritura**: escribes lo mismo, solo que en
+sitios distintos. Lo que sube es el coste de las lecturas agregadas y, sobre
+todo, el coste humano — el modelo deja de ser evidente y hay que documentar N.
+
+Y una comparación que conviene hacer antes: **repartir la clave es gratis;
+reordenar el modelo para que la consulta caliente no exista puede ser mejor**.
+Si `ESTADO#pendiente` está caliente porque consultas los pendientes cada
+segundo, quizá el arreglo no es trocear esa clave sino mantener la lista de
+pendientes en otro sitio.
+
+## Fuentes
+
+Techo de 3 000 unidades de lectura y 1 000 de escritura por partición, y el
+ejemplo del elemento de 20 KB:
+[Best practices for designing and using partition keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html).
+Estrategias de sufijo aleatorio y sufijo calculado, la fórmula sugerida y el
+coste de leer el conjunto completo:
+[Using write sharding to distribute workloads evenly](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-sharding.html).
+Capacidad por tabla y por cuenta:
+[Quotas in Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html).

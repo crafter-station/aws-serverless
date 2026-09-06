@@ -18,6 +18,11 @@ relacionados:
     porque: >-
       El redrive reinyecta mensajes que quizá se procesaron a medias. Sin
       idempotencia, vaciar una DLQ es una forma estupenda de duplicar efectos.
+  - patron: cola-punto-a-punto
+    tipo: se combina con
+    porque: >-
+      No hay un caso razonable en el que quieras reintentos infinitos: toda cola
+      punto a punto necesita su redrive policy y su alarma.
   - patron: concurrencia-reservada
     tipo: se combina con
     porque: >-
