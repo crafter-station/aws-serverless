@@ -1,0 +1,32 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Marco from './Marco.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={360}
+  tono="bien"
+  titulo="La función escribe el pedido y un elemento de outbox en la misma transacción de DynamoDB. DynamoDB Streams entrega ese elemento a una segunda función, que es la única que publica en EventBridge."
+  pie="<strong>El evento se guarda como un dato, no se envía como un mensaje.</strong> O se escriben los dos elementos o no se escribe ninguno, así que un pedido guardado siempre tiene su evento esperando. Publicar deja de ser algo que puede fallar a medias y pasa a ser un reintento."
+>
+  <Etiqueta x={40} y={24} texto="Una escritura, un destino" estilo="bien" ancla="start" />
+
+  <Marco x={16} y={104} ancho={276} alto={158} etiqueta="Todo o nada" tono="bien" />
+
+  <Nodo x={40}  y={148} icono="aws-lambda" titulo="crearPedido" />
+  <Nodo x={196} y={148} icono="amazon-dynamo-db" titulo="DynamoDB" sub="pedido + outbox" />
+
+  <Nodo x={412} y={148} icono="aws-lambda" titulo="publicarOutbox" />
+  <Nodo x={572} y={148} icono="amazon-event-bridge" titulo="EventBridge" />
+
+  <Flecha de={[94, 174]}  a={[194, 174]} etiqueta="TransactWriteItems" ey={-11} />
+  <Flecha de={[250, 174]} a={[410, 174]} tipo="evento" etiqueta="DynamoDB Streams" ey={-11} />
+  <Flecha de={[466, 174]} a={[570, 174]} tipo="evento" />
+
+  <Etiqueta x={350} y={306} texto="Los registros del stream viven 24 horas: ese es tu plazo para arreglar al consumidor" />
+  <Etiqueta x={350} y={330} texto="Streams NO conserva la atomicidad de la transacción — ver trampas" estilo="peligro" />
+</Diagrama>

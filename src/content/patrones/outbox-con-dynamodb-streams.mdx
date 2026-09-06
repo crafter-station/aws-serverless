@@ -1,7 +1,295 @@
 ---
 titulo: Outbox con DynamoDB Streams
+alias: Transactional outbox
 familia: Fiabilidad
-estado: esbozo
+estado: listo
+dificultad: 3
+intencion: Guardar el dato y el evento que lo anuncia en la misma transacción, de modo que sea imposible que uno exista sin el otro, y publicar después leyendo del cambio ya escrito.
+verificado_en: "2026-09-06"
+servicios: [dynamodb, lambda, eventbridge, sns]
+relacionados:
+  - patron: idempotencia-en-consumidores
+    tipo: se combina con
+    porque: >-
+      El outbox garantiza que el evento se publica al menos una vez, y AWS avisa
+      de que el consumo de un stream entrega cada registro al menos una vez.
+      Quien consuma esos eventos necesita ser idempotente.
+  - patron: single-table-design
+    tipo: se combina con
+    porque: >-
+      El elemento de outbox vive en la misma tabla que el dato, detrás de su
+      propio prefijo. Sin tabla compartida no hay transacción que compartir.
+  - patron: saga-por-coreografia
+    tipo: se construye encima de
+    porque: >-
+      Una saga coreografiada encadena servicios que reaccionan a los eventos de
+      otros. Sin outbox, cada eslabón puede perder su evento y la cadena se
+      corta en silencio.
 ---
 
-Por escribir.
+import OutboxProblema from '../../components/diagrama/OutboxProblema.astro';
+import OutboxSolucion from '../../components/diagrama/OutboxSolucion.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tu función crea un pedido: lo guarda en DynamoDB y publica `PedidoCreado` para
+que el resto del sistema reaccione. Dos líneas de código, en ese orden.
+
+<OutboxProblema />
+
+Entre esas dos líneas hay un instante en el que el pedido ya existe y el evento
+todavía no se ha publicado. Si el proceso muere ahí —la Lambda se queda sin
+tiempo, SNS devuelve un error, la red se cae— tienes **un pedido que existe y
+del que nadie se ha enterado**. El almacén no lo reservó, el email no salió, la
+analítica no lo cuenta.
+
+Lo peor es que **el sistema cree que todo fue bien**: no hay excepción que
+capturar más tarde, ni cola donde el mensaje esté esperando. Simplemente falta.
+
+Y no se arregla cambiando el orden. Si publicas primero y guardas después, el
+fallo produce lo contrario: un evento que anuncia un pedido que no existe, y
+consumidores que van a buscarlo y no lo encuentran. Has cambiado datos perdidos
+por datos fantasma.
+
+<Caja tipo="clave">
+Dos escrituras a dos sistemas nunca son una transacción. Siempre hay un
+instante en el que una ocurrió y la otra no. La pregunta no es cómo hacerlas
+atómicas —no se puede— sino **cómo convertirlas en una sola**.
+</Caja>
+
+## La solución
+
+Deja de *enviar* el evento y empieza a *guardarlo*. En la misma transacción que
+el dato.
+
+<OutboxSolucion />
+
+La función escribe dos elementos con `TransactWriteItems`: el pedido y un
+elemento de **outbox** que contiene el evento a publicar. Es una operación de
+todo o nada, así que el estado "pedido sin evento" deja de existir.
+
+A partir de ahí, publicar ya no es una operación que pueda fallar a medias: es
+un trabajo pendiente que está escrito en la base de datos. **DynamoDB Streams**
+entrega ese elemento a una segunda función, cuya única responsabilidad es
+publicarlo en EventBridge o SNS y marcarlo como enviado. Si falla, se reintenta;
+si la función tiene un bug, el registro sigue en el stream.
+
+La ganancia real es de tipo, no de grado: has convertido un **fallo silencioso**
+en un **reintento**.
+
+## Cuándo usarlo
+
+- Un cambio de estado **tiene que** anunciarse, y perder el aviso es un
+  incidente: pedidos, pagos, altas, cambios de permisos.
+- Hay **varios consumidores** que dependen de enterarse y no puedes ir
+  preguntándoles si les llegó.
+- Estás construyendo una **saga coreografiada**, donde cada servicio reacciona
+  al evento del anterior.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **Perder el evento no duele.** Una métrica agregada, un log de auditoría
+  best-effort. El outbox añade una tabla, una función, un stream y una clase de
+  bug nueva; que se pague sola.
+- **El consumidor puede leer el estado directamente.** Si quien necesita saberlo
+  puede consultar la tabla, quizá no necesitas un evento.
+- **No hace falta transacción.** Si solo escribes **un** elemento, puedes
+  publicar directamente desde el stream de ese elemento, sin outbox. El outbox
+  aparece cuando el evento tiene que ir atado a *varias* escrituras.
+- **Necesitas latencia mínima.** Streams añade un salto y un poll. Si el
+  consumidor tiene que enterarse en milisegundos, esto no.
+- **Tu almacén no es DynamoDB.** El patrón es general, pero esta variante vive
+  de `TransactWriteItems` y de Streams. Con RDS sería una tabla `outbox` y un
+  proceso que la sondea.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Mismo elemento de tabla, prefijo propio.** El evento se guarda como
+   `PK = PEDIDO#1001`, `SK = OUTBOX#<ulid>`, así que viaja en la misma
+   colección que el dato.
+2. **Escribe los dos con `TransactWriteItems`.** Hasta 100 acciones, hasta 4 MB
+   agregados, misma cuenta y misma región.
+3. **Activa el stream** con `NEW_IMAGE` — necesitas el contenido del evento, no
+   solo la clave.
+4. **Filtra en el event source mapping** para que la función solo despierte con
+   los `INSERT` cuyo `SK` empieza por `OUTBOX#`. Sin filtro, cada cambio de
+   cualquier elemento invoca la función.
+5. **Arranca en `TRIM_HORIZON`, no en `LATEST`** (ver trampas).
+6. **Publica y marca.** Tras publicar, borra el elemento de outbox o márcalo con
+   un TTL corto.
+7. **Activa `ReportBatchItemFailures`** y pon un destino en caso de fallo.
+
+## El código
+
+```ts
+import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+
+// ── 1. Escribir el dato y el evento como una sola operacion ────────
+export const crearPedido = async (datos: Pedido) => {
+  const evento = {
+    tipo: 'PedidoCreado',
+    id: datos.id,
+    ocurrido: new Date().toISOString(),
+    payload: { total: datos.total, cliente: datos.cliente },
+  };
+
+  await ddb.send(new TransactWriteCommand({
+    TransactItems: [
+      { Put: { TableName: 'app', Item: { PK: `PEDIDO#${datos.id}`, SK: 'META', ...datos } } },
+      // El evento es un dato mas. Si esta escritura no ocurre,
+      // la del pedido tampoco: es todo o nada.
+      { Put: { TableName: 'app', Item: { PK: `PEDIDO#${datos.id}`, SK: `OUTBOX#${ulid()}`, evento } } },
+    ],
+  }));
+};
+```
+
+```ts
+// ── 2. Publicar lo que ya esta escrito ─────────────────────────────
+export const publicarOutbox = async (e: DynamoDBStreamEvent): Promise<SQSBatchResponse> => {
+  const fallidos: { itemIdentifier: string }[] = [];
+
+  for (const r of e.Records) {
+    // El filtro del event source mapping ya deberia dejar pasar solo
+    // los INSERT de OUTBOX#, pero el codigo no se fia del despliegue.
+    if (r.eventName !== 'INSERT') continue;
+    const item = unmarshall(r.dynamodb!.NewImage!);
+    if (!item.SK?.startsWith('OUTBOX#')) continue;
+
+    try {
+      await eb.send(new PutEventsCommand({
+        Entries: [{
+          EventBusName: 'app',
+          Source: 'pedidos',
+          DetailType: item.evento.tipo,
+          Detail: JSON.stringify(item.evento),
+        }],
+      }));
+      await borrarOutbox(item.PK, item.SK);
+    } catch {
+      fallidos.push({ itemIdentifier: r.eventID! });
+    }
+  }
+
+  return { batchItemFailures: fallidos };
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · El stream NO conserva la atomicidad de la transacción">
+Esta es la trampa que invalida la intuición con la que casi todo el mundo llega
+al patrón, y está escrita literalmente en la documentación de AWS:
+
+> Los registros de stream de una misma transacción **pueden aparecer en momentos
+> distintos y pueden venir intercalados con registros de otras transacciones**.
+> Los consumidores del stream no deben asumir atomicidad ni garantías de orden
+> de la transacción.
+
+Es decir: la transacción te garantiza que **los dos elementos se escriben o
+ninguno**, pero *no* que sus registros de stream lleguen juntos ni en orden.
+
+En la práctica, para el outbox, eso está bien —tú solo reaccionas al elemento de
+outbox— pero destruye cualquier diseño que dependa de leer los dos registros de
+la misma transacción como una unidad. Si tu consumidor necesita el estado
+completo, léelo de la tabla; no lo reconstruyas a partir del stream.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · LATEST se come tus primeros eventos">
+Al crear o actualizar un event source mapping, **el sondeo tarda varios minutos
+en arrancar**, y AWS avisa de que si la posición inicial es `LATEST` el mapping
+**puede perderse eventos** durante ese hueco.
+
+En un outbox eso es exactamente lo que no puedes permitirte: el patrón entero
+existe para no perder eventos, y lo estarías rompiendo en el despliegue. Usa
+`TRIM_HORIZON`.
+
+Corolario incómodo: cada actualización del event source mapping reabre ese
+hueco. No es solo el primer despliegue.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · Tienes 24 horas y ni una más">
+Los registros de DynamoDB Streams viven **24 horas**. Pasado ese plazo
+desaparecen, y con ellos los eventos que tu función no llegó a publicar.
+
+No es Kinesis, donde puedes retener días. Si tu función de publicación tiene un
+bug un viernes por la tarde, el sábado por la tarde esos eventos ya no existen
+en el stream.
+
+La defensa es que **el elemento de outbox sigue en la tabla**: mientras no lo
+borres tras publicar, siempre puedes recorrer los outbox pendientes y
+reprocesarlos. Por eso conviene borrarlos *después* de publicar y no antes, y
+tener a mano un proceso de barrido.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Una transacción cuesta el doble">
+DynamoDB hace **dos operaciones internas por cada elemento** de la transacción:
+una para prepararla y otra para confirmarla. Escribir el pedido y el outbox no
+cuesta 2 unidades de escritura, cuesta **4**.
+
+Y hay un detalle que duele más: **esa capacidad se consume aunque la transacción
+no salga adelante**. Una transacción cancelada porque un `ConditionCheck` falló
+te cobra igual.
+
+Añade a eso que el SDK reintenta por defecto ante `TransactionInProgressException`,
+y que cada reintento consume su capacidad. Si vas con capacidad aprovisionada,
+esto hay que planificarlo, no descubrirlo.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Sin filtro, la función despierta con todo">
+El stream trae **todos** los cambios de la tabla. En un modelo single-table eso
+son perfiles, direcciones, líneas de pedido y cualquier otra cosa que escribas.
+Si el event source mapping no filtra, tu función de publicación se invoca con
+cada cambio de cualquier elemento y descarta el 95 %.
+
+Se paga en invocaciones y, peor, la función queda a merced del volumen de
+escritura de toda la tabla. Filtra en el mapping, no en el código — aunque el
+código también deba comprobarlo.
+</Caja>
+
+<Caja tipo="trampa" titulo="6 · El orden solo se garantiza por elemento">
+Lambda mantiene el procesamiento en orden **a nivel de elemento (partition key y
+sort key)**, no a nivel de tabla ni de shard cuando subes el
+`ParallelizationFactor` —que va de 1 a 10—.
+
+Si tu lógica asume que `PedidoCreado` llega antes que `PedidoPagado` porque se
+escribieron en ese orden, solo es cierto mientras compartan la misma clave.
+Entre elementos distintos no hay ninguna garantía.
+
+Y un límite físico: solo puede haber **dos funciones leyendo el mismo shard**;
+en tablas globales, AWS recomienda una.
+</Caja>
+
+## Coste
+
+| Concepto | Efecto |
+| --- | --- |
+| Escritura transaccional | **2×** la capacidad de una escritura normal, por elemento |
+| Capacidad de una transacción cancelada | se consume igual |
+| DynamoDB Streams | por lectura de registros |
+| Lambda de publicación | invocaciones + duración |
+| Publicación en EventBridge | ~1,00 USD / millón |
+
+El coste dominante suele ser el doble de capacidad de escritura, no la Lambda
+extra. Escribir pedido y outbox cuesta cuatro unidades de escritura donde antes
+gastabas una; a cambio, dejas de perder eventos.
+
+Un consuelo: **habilitar transacciones no tiene coste adicional** — pagas solo
+las lecturas y escrituras que las componen.
+
+## Fuentes
+
+Límites y semántica de `TransactWriteItems`, consumo de capacidad doble, consumo
+en transacciones canceladas, y —lo más importante— que los registros de stream
+de una misma transacción pueden aparecer intercalados y sin garantías de orden:
+[Amazon DynamoDB Transactions: How it works](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html).
+Sondeo, ventana de agrupación, `ParallelizationFactor`, orden por elemento,
+entrega al menos una vez, lectores simultáneos por shard y el aviso sobre
+`LATEST` frente a `TRIM_HORIZON`:
+[Using AWS Lambda with Amazon DynamoDB](https://docs.aws.amazon.com/lambda/latest/dg/with-ddb.html).
+Retención de 24 horas de los registros de stream:
+[Core components of Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html).

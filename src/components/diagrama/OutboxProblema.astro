@@ -1,0 +1,28 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Cruz from './Cruz.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={372}
+  tono="roto"
+  titulo="Una función guarda el pedido en DynamoDB y después publica el evento en SNS. Si la segunda llamada falla, el pedido queda guardado y el evento no se publica nunca."
+  pie="<strong>Dos escrituras a dos sistemas no son una transacción.</strong> Da igual el orden: siempre hay un instante en el que una ha ocurrido y la otra no, y si el proceso muere justo ahí, nadie lo va a arreglar."
+>
+  <Etiqueta x={40} y={24} texto="Dos escrituras, dos destinos" estilo="peligro" ancla="start" />
+
+  <Nodo x={54}  y={148} icono="aws-lambda" titulo="crearPedido" />
+  <Nodo x={330} y={68}  icono="amazon-dynamo-db" titulo="DynamoDB" sub="el pedido se guarda" />
+  <Nodo x={330} y={228} icono="amazon-simple-notification-service" titulo="SNS" sub="el evento no sale" />
+
+  <Flecha de={[110, 166]} a={[328, 100]} curva={-14} etiqueta="1 · PutItem" ey={-12} />
+  <Flecha de={[110, 186]} a={[328, 254]} curva={14} etiqueta="2 · Publish" ey={26} tipo="fallo" />
+
+  <Cruz x={240} y={226} />
+
+  <Etiqueta x={350} y={352} texto="El pedido existe · nadie se ha enterado · el sistema cree que todo fue bien" estilo="peligro" />
+</Diagrama>
