@@ -109,10 +109,30 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
 
 - [x] 1. Scaffold Astro + MDX + `@aws-icons/astro`
 - [x] 2. Ficha **fan-out** completa: prosa, 2 diagramas, 6 primitivas visuales
-- [ ] 3. Extraer el sistema: esquemas Zod, plantillas, checks de build
+- [x] 3. Extraer el sistema: esquemas Zod, plantillas, checks de build
 - [x] 4. Desplegar en [`aws.crafter.run`](https://aws.crafter.run)
 - [ ] 5. Llenar: 6 servicios + 7 patrones restantes
 - [ ] 6. Umbral de mostrar: 4 servicios + 3 patrones
+
+### Lo que el sistema resultó ser
+
+Escribir dos fichas antes de diseñar el esquema cambió tres cosas respecto a
+lo planeado:
+
+- **`estado: esbozo | listo`.** Una ficha nace como esbozo (título, familia,
+  una frase) y ya aparece en el catálogo y puede ser destino de un enlace.
+  Sin esto, enlazar un patrón obligaría a escribirlo primero, y el catálogo
+  habría que escribirlo entero de golpe.
+- **Las relaciones y los servicios se declaran en frontmatter, no en prosa.**
+  La sección "Patrones relacionados" y el "dónde aparece esto" de cada
+  servicio se **renderizan**, no se escriben. `reference()` valida en build
+  que el destino exista, y la reversa no puede desactualizarse.
+- **La tabla de límites vive alta en la ficha**, no al final: es la razón por
+  la que alguien abre una ficha de servicio.
+
+Los checks de `src/lib/coherencia.ts` se probaron en negativo (rompiendo una
+ficha a propósito) antes de darlos por buenos. Un check que nunca dispara es
+peor que ningún check.
 
 ### Despliegue
 
