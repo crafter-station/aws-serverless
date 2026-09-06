@@ -1,7 +1,315 @@
 ---
 titulo: Idempotencia en consumidores
+alias: Idempotent consumer
 familia: Fiabilidad
-estado: esbozo
+estado: listo
+dificultad: 2
+intencion: Procesar el mismo mensaje dos veces produce exactamente el mismo resultado que procesarlo una, de modo que los duplicados —que son inevitables— dejan de importar.
+verificado_en: "2026-09-06"
+servicios: [sqs, sns, lambda, dynamodb]
+relacionados:
+  - patron: fan-out
+    tipo: se combina con
+    porque: >-
+      Fan-out encadena dos entregas "al menos una vez", así que garantiza
+      duplicados. Es el sitio donde este patrón deja de ser recomendable y pasa
+      a ser obligatorio.
+  - patron: dlq-y-redrive
+    tipo: se combina con
+    porque: >-
+      El redrive reintenta, y cada reintento es otra ocasión de duplicar. Sin
+      idempotencia, una DLQ bien configurada multiplica el daño en vez de
+      contenerlo.
+  - patron: outbox-con-dynamodb-streams
+    tipo: se combina con
+    porque: >-
+      El outbox garantiza que el evento se publica al menos una vez; quien lo
+      consume necesita este patrón para que ese "al menos" no se note.
+  - patron: saga-orquestada-con-step-functions
+    tipo: se combina con
+    porque: >-
+      Step Functions reintenta los pasos que fallan. Un paso no idempotente
+      convierte un reintento rutinario en un cobro doble.
 ---
 
-Por escribir.
+import IdempotenciaProblema from '../../components/diagrama/IdempotenciaProblema.astro';
+import IdempotenciaSolucion from '../../components/diagrama/IdempotenciaSolucion.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Tienes una Lambda que consume una cola y cobra pedidos. Funciona. Lleva meses
+funcionando. Y un martes cualquiera, un cliente te escribe porque le has cobrado
+dos veces los mismos 50 €.
+
+Revisas los logs y no hay nada: ninguna excepción, ningún reintento, ningún
+error. Solo dos invocaciones perfectamente normales, con el mismo contenido,
+separadas por unos segundos.
+
+<IdempotenciaProblema />
+
+No es un bug tuyo. Es el contrato del servicio que estás usando, escrito en su
+documentación y aceptado el día que elegiste una cola estándar:
+
+> *"more than one copy of a message might be delivered, and messages may
+> occasionally arrive out of order"*
+
+SQS entrega **al menos una vez**. SNS también. Y "al menos una vez" no es una
+forma educada de decir "una vez"; significa literalmente que la entrega
+duplicada es un comportamiento correcto del sistema, no una avería.
+
+Las causas son de lo más rutinario:
+
+- El *visibility timeout* expiró mientras tu función seguía trabajando, así que
+  el mensaje reapareció y otro consumidor lo cogió.
+- Tu función hizo el trabajo y falló **después**, al borrar el mensaje o al
+  responder. El efecto ya estaba hecho; el mensaje volvió igualmente.
+- El productor reintentó porque no vio la respuesta de `Publish`, aunque el
+  mensaje sí había entrado.
+- La arquitectura es un fan-out, y ahí se encadenan dos entregas "al menos una
+  vez": la de SNS a la cola y la de la cola a tu función.
+
+<Caja tipo="clave">
+La pregunta correcta no es *"¿cómo evito los duplicados?"* — no puedes, están
+en el contrato. Es **"¿cómo hago que dé igual?"**.
+</Caja>
+
+## La solución
+
+Que el consumidor **recuerde lo que ya hizo** y decida en la misma operación
+atómica en la que lo anota.
+
+<IdempotenciaSolucion />
+
+Antes de hacer nada con efectos, el consumidor intenta escribir la clave del
+mensaje en una tabla de DynamoDB con una **escritura condicional**:
+`attribute_not_exists(pk)`. Solo hay dos desenlaces posibles:
+
+- **La escritura gana.** Nadie había procesado este mensaje. Adelante.
+- **La escritura choca** con `ConditionalCheckFailedException`. Ya está hecho.
+  No hagas nada y borra el mensaje.
+
+Lo que hace que esto funcione —y lo que se pierde en casi todas las
+implementaciones caseras— es que **comprobar y anotar son la misma operación**.
+Un `GetItem` seguido de un `PutItem` deja un hueco de milisegundos entre "no
+existe" y "ahora sí"; dos entregas simultáneas del mismo mensaje pueden colarse
+las dos por ese hueco. La escritura condicional no tiene hueco.
+
+### La clave importa más que el mecanismo
+
+De qué derivas la clave decide si el patrón funciona:
+
+- **Bien:** un identificador del *hecho de negocio* — el id del pedido, el id de
+  la transacción, un `Idempotency-Key` que envió el cliente.
+- **Regla útil:** si dos mensajes distintos deben producir dos efectos, sus
+  claves tienen que diferir. Si el mismo hecho llega dos veces, sus claves
+  tienen que coincidir.
+- **Mal:** el `messageId` de SQS. Parece la elección obvia y es una trampa —
+  cuando SNS reenvía el mismo evento a la cola, genera un `messageId` **nuevo**.
+  Dos mensajes distintos, mismo hecho, y tu tabla no los relaciona.
+- **Mal:** un hash del cuerpo, si el cuerpo lleva un timestamp o un campo que
+  cambia entre reintentos.
+
+## Cuándo usarlo
+
+- Cualquier consumidor de SQS, SNS, EventBridge o Kinesis que tenga **efectos
+  observables**: cobrar, enviar, crear, descontar, notificar.
+- Cualquier endpoint que reciba webhooks de terceros — Stripe, GitHub y
+  compañía reintentan, y lo dicen en su documentación.
+- Cualquier paso de una saga o de una máquina de estados con reintentos.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **La operación ya es idempotente por naturaleza.** `estado = "enviado"` da lo
+  mismo aplicado una vez que diez. Un `PutItem` que reemplaza el elemento
+  entero, igual. Añadir una tabla de idempotencia encima no aporta nada y suma
+  una llamada, una tabla y un modo de fallo.
+- **El efecto es un incremento.** `saldo = saldo + 10` **no** es idempotente, y
+  aquí este patrón es imprescindible: no es un caso donde saltárselo, es el
+  caso peligroso por excelencia.
+- **Los duplicados son gratis y raros.** Un consumidor que solo escribe una
+  métrica agregada puede tolerarlos. Sé explícito en el código sobre esa
+  decisión: el próximo que lo lea supondrá que se te olvidó.
+- **El almacén ya te da la garantía.** Si escribes con una condición sobre el
+  propio dato de negocio —bloqueo optimista con número de versión— ya tienes
+  idempotencia sin una tabla aparte.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Elige la clave** a partir del hecho de negocio, nunca del transporte.
+2. **Crea la tabla** con la clave como partition key y un atributo numérico para
+   el TTL. No necesita nada más.
+3. **Escribe primero, actúa después.** `PutItem` condicional con
+   `attribute_not_exists`, y solo si gana, ejecuta el efecto.
+4. **Captura `ConditionalCheckFailedException`** y trátala como éxito: el
+   trabajo está hecho, borra el mensaje.
+5. **Decide qué pasa si el efecto falla** después de haber ganado la escritura
+   (ver trampas).
+6. **Pon un TTL generoso**: más largo que cualquier ventana de reintento
+   plausible, y consciente de que borra tarde.
+
+## El código
+
+```ts
+import { DynamoDBClient, ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const TABLA = process.env.TABLA_IDEMPOTENCIA!;
+const VENTANA_H = 24 * 7; // muy por encima de cualquier reintento plausible
+
+type Resultado = 'procesar' | 'ya-hecho';
+
+async function reservar(clave: string): Promise<Resultado> {
+  try {
+    await ddb.send(new PutCommand({
+      TableName: TABLA,
+      Item: {
+        pk: clave,
+        estado: 'en-curso',
+        creado: Date.now(),
+        expira: Math.floor(Date.now() / 1000) + VENTANA_H * 3600,
+      },
+      // Comprobar y anotar en la MISMA operación atómica. Un GetItem
+      // seguido de un PutItem deja un hueco por el que caben dos
+      // entregas simultaneas del mismo mensaje.
+      ConditionExpression: 'attribute_not_exists(pk)',
+    }));
+    return 'procesar';
+  } catch (e) {
+    if (e instanceof ConditionalCheckFailedException) return 'ya-hecho';
+    throw e; // Un fallo real de DynamoDB no es un duplicado: que reintente.
+  }
+}
+
+export const cobrarPedido = async (evento: SQSEvent): Promise<SQSBatchResponse> => {
+  const fallidos: { itemIdentifier: string }[] = [];
+
+  for (const registro of evento.Records) {
+    const pedido = JSON.parse(registro.body);
+    // La clave sale del hecho de negocio, NO del messageId de SQS:
+    // cuando SNS reenvia el mismo evento, el messageId es otro.
+    const clave = `cobro#${pedido.id}`;
+
+    try {
+      if (await reservar(clave) === 'ya-hecho') continue;
+
+      const recibo = await cobrar(pedido);
+
+      await ddb.send(new UpdateCommand({
+        TableName: TABLA,
+        Key: { pk: clave },
+        UpdateExpression: 'SET estado = :ok, recibo = :r',
+        ExpressionAttributeValues: { ':ok': 'hecho', ':r': recibo.id },
+      }));
+    } catch (err) {
+      // Si el cobro falla despues de ganar la reserva, hay que soltarla:
+      // si no, el reintento vera "ya hecho" y el cobro no ocurrira jamas.
+      await soltar(clave).catch(() => {});
+      fallidos.push({ itemIdentifier: registro.messageId });
+    }
+  }
+
+  return { batchItemFailures: fallidos };
+};
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · La ventana entre reservar y hacer">
+Ganas la escritura condicional y, un instante después, el cobro falla. Ahora la
+clave dice "en curso" pero el efecto no ocurrió. Si no haces nada, el reintento
+verá la clave, creerá que ya está hecho y **el cobro no se hará nunca**. Has
+cambiado un cobro duplicado por un cobro perdido, que suele ser peor.
+
+Hay dos salidas y conviene elegir a conciencia:
+
+- **Soltar la reserva** al fallar, como en el código de arriba. Simple, pero si
+  la Lambda muere entre el fallo y el borrado, la clave se queda colgada hasta
+  el TTL.
+- **Guardar el estado** (`en-curso` / `hecho`) y que el reintento distinga: si
+  encuentra `en-curso` y es viejo, reintenta; si encuentra `hecho`, se salta.
+  Es lo que hace [Powertools](https://docs.aws.amazon.com/powertools/), y es la
+  razón por la que casi siempre conviene usarlo en vez de escribir esto a mano.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · El TTL de DynamoDB borra tarde. Mucho más tarde.">
+Este es el que sorprende. La documentación de AWS dice que DynamoDB elimina los
+elementos caducados *"within a few days of their expiration time"* y que pueden
+ser borrados *"at any time, typically within a few days after their
+expiration"*.
+
+O sea: pones un TTL de 24 horas y ese elemento puede seguir ahí **cuatro días
+después**. Si tu lógica de negocio es "el mismo pedido puede reenviarse pasado
+un día", una reenvío legítimo se descartará silenciosamente como duplicado.
+
+Y el reverso: mientras no se borre de verdad, **sigue apareciendo en tus `Query`
+y `Scan`**. AWS lo dice explícitamente: hay que usar filter expressions para
+quitar los caducados de los resultados. Para idempotencia eso juega a favor —
+lo peligroso es asumir que ya no está.
+
+La regla práctica: el TTL es para **no pagar almacenamiento eterno**, no para
+definir una ventana de negocio. Si la ventana importa, guárdala en un atributo
+y compárala tú.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · El messageId no identifica el hecho">
+Usar `registro.messageId` como clave es la trampa más común, porque parece la
+respuesta obvia y funciona en la prueba manual. Falla en dos escenarios muy
+normales: cuando SNS reenvía el mismo evento —cada entrega es un mensaje nuevo
+con id nuevo— y cuando el productor reintenta un `SendMessage` que sí había
+llegado.
+
+Deriva siempre la clave del contenido con significado: el id del pedido, el de
+la transacción, el `Idempotency-Key` del cliente.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Una tabla, no la tabla">
+Tentación razonable: meter las claves de idempotencia en la misma tabla de
+negocio. Se puede, pero mezcla dos ciclos de vida muy distintos: los pedidos
+duran años, las claves duran días. Acabas con un TTL activo en una tabla que
+contiene datos que no quieres perder, y basta un atributo mal calculado para
+que DynamoDB empiece a borrar pedidos.
+
+Si compartes tabla, aísla las claves detrás de un prefijo inequívoco y ten muy
+claro qué elementos llevan el atributo de TTL.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · Idempotencia no es exactamente-una-vez">
+Este patrón hace que el **efecto** ocurra una vez. No impide que el mensaje se
+entregue varias, ni que tu función se invoque varias, ni que pagues por esas
+invocaciones. "Exactly-once processing" en un sistema distribuido es
+"at-least-once delivery" más un consumidor idempotente; no existe como
+propiedad del transporte.
+</Caja>
+
+## Coste
+
+Barato, pero no gratis, y el precio se paga en el camino feliz:
+
+| Concepto | Efecto |
+| --- | --- |
+| Escritura condicional | 1 WCU por mensaje procesado |
+| Actualización del estado final | 1 WCU más, si la haces |
+| Borrado por TTL | **sin coste de escritura** |
+| Almacenamiento | proporcional a la ventana de TTL |
+
+Es decir: **añades una o dos escrituras a DynamoDB por cada mensaje**, incluso
+cuando no hay ningún duplicado — que es el 99,9 % de las veces. A cambio evitas
+el 0,1 % que te cobra dos veces a un cliente. Casi siempre es un cambio
+excelente, pero conviene saber que se está haciendo.
+
+El borrado por TTL no consume capacidad de escritura, salvo en tablas globales:
+ahí la réplica del borrado sí se factura en cada región réplica.
+
+## Fuentes
+
+Garantías de entrega y desorden en colas estándar:
+[Amazon SQS standard queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html).
+Retraso real del borrado por TTL, visibilidad de los elementos caducados y
+consumo de capacidad:
+[Using time to live (TTL) in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html).
+Reintentos de entrega de SNS:
+[Amazon SNS message delivery retries](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html).

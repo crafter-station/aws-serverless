@@ -1,7 +1,202 @@
 ---
 titulo: SQS
+nombre_completo: Amazon Simple Queue Service
 icono: amazon-simple-queue-service
-estado: esbozo
+estado: listo
+en_una_frase: >-
+  Un buzón gestionado con una regla que sorprende a todo el mundo: leer un
+  mensaje no lo borra, solo lo esconde durante un rato.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: Visibility timeout
+    explicacion: >-
+      Recibir un mensaje no lo saca de la cola: lo oculta durante un tiempo
+      (30 segundos por defecto). Si no lo borras antes de que expire, reaparece
+      y otro consumidor lo procesa. Casi todos los bugs raros de SQS son este
+      reloj mal ajustado.
+  - termino: El consumidor tira, y el consumidor borra
+    explicacion: >-
+      La cola no empuja nada: alguien pregunta. Y el ciclo tiene tres pasos, no
+      dos — recibir, procesar y **borrar**. Si tu código se salta el tercero o
+      lo hace en el orden equivocado, o duplicas trabajo o pierdes mensajes.
+  - termino: Estándar o FIFO
+    explicacion: >-
+      Estándar da throughput casi ilimitado a cambio de duplicados y desorden.
+      FIFO da orden por grupo de mensajes y deduplicación a cambio de mucho
+      menos throughput. No hay una tercera opción, y elegir mal es caro de
+      deshacer.
+limites:
+  - concepto: Tamaño de mensaje
+    valor: 1 048 576 bytes (1 MiB)
+    tipo: hard
+    nota: >-
+      Cuatro veces lo que admite SNS. Si publicas vía SNS, el techo real son sus
+      256 KiB. Con las Extended Client Libraries el payload sube a 2 GB vía S3.
+  - concepto: Mensajes por lote
+    valor: 10
+    tipo: hard
+    nota: Aplica a SendMessageBatch, ReceiveMessage y DeleteMessageBatch.
+  - concepto: Atributos por mensaje
+    valor: 10
+    tipo: hard
+  - concepto: Visibility timeout
+    valor: 30 s por defecto · máximo 12 h
+    tipo: hard
+  - concepto: Retención de mensajes
+    valor: 4 días por defecto · de 60 s a 14 días
+    tipo: hard
+    nota: Los 14 días no se amplían. Pasado ese plazo el mensaje se borra sin avisar a nadie.
+  - concepto: Retraso de entrega
+    valor: máximo 15 minutos
+    tipo: hard
+    nota: Para esperas más largas necesitas Step Functions o EventBridge Scheduler.
+  - concepto: Espera de long polling
+    valor: máximo 20 segundos
+    tipo: hard
+  - concepto: Mensajes en vuelo — estándar
+    valor: ~120 000
+    tipo: soft
+    nota: >-
+      Recibidos y aún sin borrar. Se llega a este techo cuando los consumidores
+      van más lentos que el productor, y con short polling devuelve OverLimit.
+  - concepto: Mensajes almacenados en la cola
+    valor: ilimitado
+    tipo: soft
+    nota: El backlog no tiene techo. Lo que tiene techo es lo que está en vuelo.
+  - concepto: FIFO sin alto rendimiento
+    valor: 300 TPS por acción · 3 000 msg/s con lotes
+    tipo: soft
+  - concepto: FIFO con alto rendimiento
+    valor: 70 000 TPS en us-east-1, us-west-2 y eu-west-1 · 2 400 TPS en el resto
+    tipo: soft
+    nota: Con lotes de 10 sube a 700 000 msg/s en las tres regiones grandes y a 24 000 en las demás.
+  - concepto: Política de recursos de la cola
+    valor: 8 192 bytes · 20 sentencias
+    tipo: hard
+  - concepto: Longitud del nombre de cola
+    valor: 80 caracteres
+    tipo: hard
 ---
 
-Por escribir.
+## Modelo mental
+
+Si SNS es un altavoz, SQS es **un buzón**. Guarda lo que le echas hasta que
+alguien viene a recogerlo, y el backlog no tiene techo: puedes acumular millones
+de mensajes sin que la cola se inmute.
+
+Pero tiene una regla que descoloca a todo el mundo la primera vez:
+
+> **Recibir un mensaje no lo borra. Lo esconde.**
+
+Cuando llamas a `ReceiveMessage`, SQS te entrega el mensaje y arranca un
+cronómetro —el *visibility timeout*, 30 segundos por defecto— durante el cual
+ese mensaje es invisible para los demás consumidores. Tienes ese rato para
+procesarlo y llamar a `DeleteMessage`. Si no lo haces, el cronómetro expira, el
+mensaje reaparece en la cola y otro consumidor lo coge.
+
+Ese diseño es deliberado y es lo que hace a SQS fiable: si tu consumidor muere a
+mitad de proceso, nadie tiene que enterarse ni avisar a nadie. El mensaje vuelve
+solo. El precio es que **el borrado es responsabilidad tuya** y que el reloj hay
+que ajustarlo a mano.
+
+El ciclo, entonces, tiene tres pasos y no dos:
+
+1. `ReceiveMessage` — el mensaje se oculta
+2. tu código hace el trabajo
+3. `DeleteMessage` — ahora sí desaparece
+
+Con Lambda, el *event source mapping* hace el 1 y el 3 por ti: borra el mensaje
+si tu función termina sin lanzar. Es cómodo y es también la razón por la que
+mucha gente lleva años usando SQS sin saber que el visibility timeout existe —
+hasta el día que su función tarda más de lo previsto.
+
+**La cola no empuja: alguien pregunta.** Por defecto ese sondeo es *short
+polling*, que responde al instante aunque no haya nada. Casi siempre quieres
+*long polling* (`WaitTimeSeconds` hasta 20 segundos): menos respuestas vacías,
+menos latencia y menos factura.
+
+## Cómo te factura
+
+Se paga por **peticiones**, no por mensajes ni por almacenamiento:
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| Colas estándar | ~0,40 USD / millón de peticiones |
+| Colas FIFO | algo más caro por petición |
+| Primer millón de peticiones al mes | gratis |
+| Guardar mensajes en la cola | sin coste |
+
+Dos reglas mueven la factura mucho más que el precio unitario:
+
+**Cada porción de 64 KB cuenta como una petición.** La documentación de precios
+es explícita: una acción con un payload de 1 MiB se factura como 16 peticiones.
+Mandar el hecho y una referencia a S3 en vez del documento entero no es solo más
+limpio, es dieciséis veces más barato.
+
+**El sondeo también factura, haya mensajes o no.** Una cola vacía conectada a
+una Lambda genera peticiones `ReceiveMessage` las veinticuatro horas. No arruina
+a nadie, pero explica la línea de SQS cuando el sistema "no está haciendo nada".
+Long polling con 20 segundos reduce ese goteo a la vigésima parte de lo que
+costaría sondeando cada segundo.
+
+Y una que ahorra de verdad: **los lotes**. Diez mensajes en una llamada son una
+petición, no diez. Si controlas el productor, batear es la optimización más
+rentable que vas a hacer aquí.
+
+## Cuándo NO usarlo
+
+- **Varios consumidores tienen que ver el mismo mensaje.** Una cola *reparte*,
+  no duplica: cada mensaje lo recibe uno solo. Dos consumidores compartiendo
+  cola es un reparto de carga, no un fan-out. Eso es SNS o EventBridge delante.
+- **Necesitas volver a leer lo que ya pasó.** Un mensaje borrado no existe.
+  No hay replay, no hay "los últimos siete días de eventos". Eso es Kinesis.
+- **Necesitas orden global.** FIFO ordena *dentro de un grupo de mensajes*, no
+  en toda la cola — y si metes todo en un solo grupo, tu throughput se desploma
+  a lo que dé una sola partición.
+- **Necesitas la respuesta para seguir.** Una cola es asíncrona por definición.
+  Montar request-reply sobre SQS se puede, pero si el cliente está esperando,
+  casi siempre querías una llamada síncrona.
+- **La espera pasa de 15 minutos.** El retraso máximo de un mensaje son 15
+  minutos. Para "recuérdame dentro de tres días", EventBridge Scheduler o Step
+  Functions.
+
+## Errores comunes
+
+**El visibility timeout más corto que el proceso.** Es el error número uno y no
+falla ruidosamente: falla duplicando trabajo. Tu función tarda 45 segundos, el
+timeout son 30, así que a los 30 el mensaje reaparece y un segundo consumidor
+empieza a procesarlo mientras el primero sigue vivo. Ahora tienes dos cobros,
+dos emails, dos de lo que sea. Con Lambda, el visibility timeout tiene que estar
+cómodamente por encima del timeout de la función, no ajustado.
+
+**No activar `reportBatchItemFailures`.** Sin eso, si un mensaje de un lote de
+diez falla, los diez vuelven a la cola y los nueve buenos se reprocesan. Un solo
+mensaje venenoso puede tener a tu función dando vueltas indefinidamente.
+
+**No poner DLQ.** Sin `redrivePolicy`, un mensaje que siempre falla se reintenta
+hasta agotar la retención — hasta 14 días de invocaciones que siempre fallan,
+que sí se facturan.
+
+**Quedarse en short polling.** Es el valor por defecto y casi nunca es lo que
+quieres: más respuestas vacías, más latencia percibida y más peticiones.
+
+**Asumir orden en una cola estándar.** La documentación dice literalmente que
+los mensajes *"pueden llegar desordenados"*. Si tu lógica depende del orden de
+llegada, funcionará en desarrollo y fallará en producción bajo carga.
+
+**Olvidar que hay un techo de mensajes en vuelo.** Unos 120 000 en colas
+estándar. No se llega procesando rápido: se llega cuando los consumidores no dan
+abasto y todo se queda recibido y sin borrar.
+
+## Fuentes
+
+Cuotas de mensajes, tamaños, visibility timeout y throughput FIFO:
+[Amazon SQS message quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html).
+Mensajes en vuelo, long polling y retrasos:
+[Amazon SQS standard queue quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-queues.html).
+Garantías de entrega y desorden:
+[Amazon SQS standard queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html).
+Regla de facturación por porciones de 64 KB:
+[SQS pricing](https://aws.amazon.com/sqs/pricing/). Los importes concretos
+proceden de la página de precios de AWS, que se renderiza dinámicamente y no
+pudo citarse literalmente: trátalos como orden de magnitud.

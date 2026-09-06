@@ -1,0 +1,34 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+
+/*
+  Sin cruces de fallo a propósito: aquí no falla nada. Todas las llamadas
+  devuelven 200 y el sistema se comporta como está documentado. Ese es
+  exactamente el problema, y una cruz lo contaría mal.
+*/
+---
+
+<Diagrama
+  ancho={700}
+  alto={330}
+  tono="roto"
+  titulo="La cola entrega el mensaje 4711 dos veces. El consumidor no distingue el duplicado y llama dos veces al API de pagos, así que el cliente paga el doble."
+  pie="<strong>El duplicado no es un fallo: es el contrato.</strong> SQS estándar entrega al menos una vez, y la documentación de AWS dice que puede llegar más de una copia. Un consumidor que no lo contempla no está <em>casi</em> bien: está roto y todavía no se ha notado."
+>
+  <Etiqueta x={40} y={24} texto="Sin idempotencia" estilo="peligro" ancla="start" />
+
+  <Nodo x={40}  y={140} icono="amazon-simple-queue-service" titulo="SQS" sub="cola-cobros" />
+  <Nodo x={260} y={140} icono="aws-lambda" titulo="cobrarPedido" />
+  <Nodo x={510} y={140} titulo="API de pagos" sub="servicio externo" />
+
+  <Flecha de={[94, 160]} a={[258, 152]} curva={-22} etiqueta="entrega · msg 4711" ey={-11} />
+  <Flecha de={[94, 178]} a={[258, 190]} curva={22} etiqueta="la misma, otra vez" ey={27} tipo="fallo" />
+
+  <Flecha de={[314, 152]} a={[508, 150]} curva={-20} etiqueta="cobra 50 €" ey={-11} />
+  <Flecha de={[314, 190]} a={[508, 186]} curva={20} etiqueta="cobra 50 € otra vez" ey={27} tipo="fallo" />
+
+  <Etiqueta x={350} y={306} texto="El cliente ha pagado 100 € · nadie ha lanzado una excepción · no hay nada en los logs" estilo="peligro" />
+</Diagrama>

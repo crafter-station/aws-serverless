@@ -20,7 +20,7 @@ relacionados:
       consumidor, que es de donde vienen casi todos.
   - patron: claim-check
     tipo: se combina con
-    porque: Cuando el evento no cabe en los 256 KB que admite SNS.
+    porque: Cuando el evento no cabe en los 256 KiB que admite SNS.
   - patron: pubsub-con-eventbridge
     tipo: compite con
     porque: >-
@@ -266,10 +266,16 @@ está roto y todavía no te has enterado. Si el consumidor manda emails, tu clie
 recibirá dos.
 </Caja>
 
-<Caja tipo="trampa" titulo="6 · El límite de 256 KB">
-El mensaje máximo de SNS son **262 144 bytes (256 KiB)**, igual que en SQS. No
-metas el PDF de la factura en el evento: mete el hecho y una referencia a S3. Si
-de verdad necesitas payloads grandes, existen las *Extended Client Libraries*
+<Caja tipo="trampa" titulo="6 · El techo lo pone SNS, no SQS">
+Los dos límites **no son el mismo**, y es un error fácil de heredar de tutoriales
+viejos: SQS admite hoy **1 048 576 bytes (1 MiB)** por mensaje, mientras que SNS
+sigue en **262 144 bytes (256 KiB)**.
+
+En un fan-out eso significa que el techo real es el de SNS. Un evento de 400 KB
+cabría de sobra en cualquiera de tus colas y aun así el `Publish` te lo rechaza.
+
+No metas el PDF de la factura en el evento: mete el hecho y una referencia a S3.
+Si de verdad necesitas payloads grandes, existen las *Extended Client Libraries*
 (hasta 2 GB apoyándose en S3), que es exactamente el patrón claim-check con otro
 nombre.
 </Caja>

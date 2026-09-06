@@ -1,0 +1,33 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={400}
+  tono="bien"
+  titulo="Antes de cobrar, el consumidor intenta escribir la clave del mensaje en una tabla de DynamoDB con una escritura condicional. La primera entrega gana la escritura y cobra; la segunda choca con la condición, no cobra y borra el mensaje igualmente."
+  pie="<strong>Decidir y recordar son la misma operación.</strong> La escritura condicional es atómica: no hay hueco entre comprobar si ya se hizo y anotar que se hace, así que dos entregas simultáneas del mismo mensaje no pueden ganar las dos."
+>
+  <Etiqueta x={40} y={24} texto="Con idempotencia" estilo="bien" ancla="start" />
+
+  <Nodo x={30}  y={176} icono="amazon-simple-queue-service" titulo="SQS" sub="cola-cobros" />
+  <Nodo x={190} y={176} icono="aws-lambda" titulo="cobrarPedido" />
+  <Nodo x={360} y={176} icono="amazon-dynamo-db" titulo="DynamoDB" sub="idempotencia" />
+
+  <Nodo x={572} y={60}  titulo="API de pagos" sub="cobra una vez" />
+  <Nodo x={572} y={286} titulo="No hace nada" sub="y borra el mensaje" tenue />
+
+  <Flecha de={[84, 194]}  a={[188, 188]} curva={-18} etiqueta="entrega 1" ey={-11} />
+  <Flecha de={[84, 212]}  a={[188, 222]} curva={18} etiqueta="entrega 2" ey={27} tipo="evento" />
+
+  <Flecha de={[244, 202]} a={[358, 202]} etiqueta="PutItem condicional" ey={-11} />
+
+  <Flecha de={[416, 190]} a={[570, 106]} curva={-16} etiqueta="gana la escritura" ex={-58} ey={-16} />
+  <Flecha de={[416, 214]} a={[570, 306]} curva={16} etiqueta="ConditionalCheckFailed" ex={-62} ey={28} />
+
+  <Etiqueta x={350} y={382} texto="La clave sale del hecho de negocio, no del messageId · el TTL limpia, pero tarde (ver trampas)" />
+</Diagrama>

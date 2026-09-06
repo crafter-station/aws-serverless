@@ -27,7 +27,9 @@ limites:
   - concepto: Tamaño de mensaje
     valor: 262 144 bytes (256 KiB)
     tipo: hard
-    nota: Con las Extended Client Libraries el payload sube a 2 GB apoyándose en S3.
+    nota: >-
+      Cuidado: SQS admite 1 MiB, cuatro veces más. En un fan-out el techo lo pone
+      SNS. Con las Extended Client Libraries el payload sube a 2 GB vía S3.
   - concepto: Cabecera del mensaje
     valor: 16 384 bytes (16 KiB)
     tipo: hard
@@ -140,7 +142,8 @@ Un evento gordo cuesta cuatro veces más que un evento con una referencia a S3.
 - **Quieres mandar emails de producto.** SNS entrega email a 10 por segundo por
   suscripción y es un límite duro, sin plantillas, sin métricas de apertura y
   sin gestión de rebotes. Eso es SES.
-- **El mensaje no cabe en 256 KB.** Manda el hecho y una referencia a S3.
+- **El mensaje no cabe en 256 KiB.** Y ojo: SQS admite 1 MiB, así que el
+  límite que te frena es el de SNS. Manda el hecho y una referencia a S3.
 
 ## Errores comunes
 
