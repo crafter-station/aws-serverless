@@ -11,6 +11,12 @@ intencion: >-
 verificado_en: "2026-09-06"
 servicios: [lambda, step-functions, dynamodb, sqs, s3]
 relacionados:
+  - patron: throttling-y-rate-limiting
+    tipo: se combina con
+    porque: >-
+      El 429 solo reduce el tráfico si el cliente lo entiende. Contra uno que
+      reintenta sin backoff, el rate limit no frena nada: cierra un bucle que
+      vuelve todavía más rápido.
   - patron: circuit-breaker
     tipo: se combina con
     porque: >-

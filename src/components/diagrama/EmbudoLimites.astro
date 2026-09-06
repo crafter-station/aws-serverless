@@ -1,0 +1,67 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Etiqueta from './Etiqueta.astro';
+
+/*
+  Los tres límites en la misma unidad — peticiones por segundo — porque en sus
+  unidades nativas (RPS, concurrencia, WCU) no se pueden comparar, y esa es
+  justamente la razón por la que nadie los compara.
+
+  Escala: 10 000 RPS = 470 px.
+*/
+const ESCALA = 470 / 10000;
+const CAPAS = [
+  {
+    y: 34,
+    icono: 'amazon-api-gateway',
+    titulo: 'API Gateway',
+    rps: 10000,
+    valor: '10 000 RPS',
+    detalle: 'cuenta y región',
+  },
+  {
+    y: 132,
+    icono: 'aws-lambda',
+    titulo: 'Lambda',
+    rps: 5000,
+    valor: '5 000 RPS',
+    detalle: '1 000 concurrentes ÷ 200 ms',
+  },
+  {
+    y: 230,
+    icono: 'amazon-dynamo-db',
+    titulo: 'DynamoDB',
+    rps: 1000,
+    valor: '1 000 RPS',
+    detalle: 'una sola partición',
+  },
+];
+const X0 = 122;
+---
+
+<Diagrama
+  ancho={700}
+  alto={306}
+  tono="roto"
+  titulo="Tres límites en cascada expresados todos en peticiones por segundo. API Gateway admite 10 000, la concurrencia de Lambda equivale a 5 000 y una partición de DynamoDB soporta 1 000. La puerta de entrada es diez veces más ancha que el cuello de botella real."
+  pie="<strong>La puerta es más ancha que la habitación.</strong> Los límites por defecto no están alineados entre sí, y el más generoso es el primero — el que da a internet. Sin un throttle propio, API Gateway acepta encantado diez veces el tráfico que tu partición puede escribir, y tú pagas las diez veces."
+>
+  {CAPAS.map((c) => (
+    <Fragment>
+      <Nodo x={40} y={c.y} icono={c.icono} titulo={c.titulo} tam={40} />
+      <rect x={X0} y={c.y + 4} width={c.rps * ESCALA} height={32} rx="3" class="capa" />
+      <Etiqueta x={X0 + c.rps * ESCALA + 12} y={c.y + 18} texto={c.valor} ancla="start" estilo="titulo" />
+      <Etiqueta x={X0 + c.rps * ESCALA + 12} y={c.y + 34} texto={c.detalle} ancla="start" />
+    </Fragment>
+  ))}
+
+  {/* La línea del cuello de botella real, subida hasta arriba. */}
+  <path d={`M${X0 + 1000 * ESCALA},38 L${X0 + 1000 * ESCALA},266`} class="cuello" />
+  <Etiqueta x={X0} y={292} texto="↑ lo que de verdad cabe" estilo="peligro" ancla="start" />
+</Diagrama>
+
+<style>
+  .capa { fill: var(--papel-hondo); stroke: var(--linea-fuerte); stroke-width: 1.25; }
+  .cuello { stroke: var(--peligro); stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+</style>

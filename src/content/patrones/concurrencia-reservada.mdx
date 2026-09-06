@@ -8,6 +8,13 @@ intencion: Repartir el bote de concurrencia de la cuenta para que ninguna funci�
 verificado_en: "2026-09-06"
 servicios: [lambda, sqs, dynamodb]
 relacionados:
+  - patron: throttling-y-rate-limiting
+    tipo: se combina con
+    porque: >-
+      Son la puerta y el mamparo. El throttle de API Gateway decide cuánto
+      tráfico entra; la concurrencia reservada, cuánto de la cuenta puede
+      consumir cada función. Los dos números se calculan del mismo cuello de
+      botella.
   - patron: circuit-breaker
     tipo: se combina con
     porque: >-

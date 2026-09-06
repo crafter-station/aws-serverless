@@ -1,0 +1,62 @@
+---
+import Diagrama from './Diagrama.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+
+/*
+  El token bucket. Dos parámetros y la gente configura uno: pone el "rate" y se
+  sorprende de que lleguen 200 peticiones en el mismo instante. El dibujo
+  existe para que se vea que "burst" es el tamaño del cubo, no una tolerancia
+  vaga.
+*/
+const CUBO = { x: 268, y: 86, ancho: 168, alto: 132 };
+
+// Fichas disponibles ahora mismo: el cubo a poco más de media capacidad.
+const FICHAS = [];
+for (let fila = 0; fila < 3; fila++) {
+  for (let col = 0; col < 6; col++) {
+    FICHAS.push({ cx: CUBO.x + 22 + col * 25, cy: CUBO.y + CUBO.alto - 20 - fila * 26 });
+  }
+}
+---
+
+<Diagrama
+  ancho={700}
+  alto={296}
+  titulo="El algoritmo del cubo de fichas. Un grifo rellena el cubo a un ritmo constante, que es el rate. El cubo tiene una capacidad máxima, que es el burst. Cada petición coge una ficha: si hay, pasa; si el cubo está vacío, la respuesta es 429 Too Many Requests."
+  pie="<strong>Son dos parámetros y casi todo el mundo configura uno.</strong> El <em>rate</em> es el ritmo sostenido; el <em>burst</em> es cuántas peticiones pueden llegar en el mismo instante. Con rate 100 y burst 200, un cliente puede meterte 200 de golpe y luego 100 por segundo — y quien tiene que aguantar esas 200 es lo que haya detrás."
+>
+  {/* El grifo: el rate. */}
+  <Flecha de={[352, 26]} a={[352, 80]} />
+  <Etiqueta x={366} y={48} texto="rate · se reponen 100 fichas por segundo" ancla="start" estilo="bien" />
+
+  {/* El cubo, abierto por arriba. */}
+  <path
+    d={`M${CUBO.x},${CUBO.y} L${CUBO.x},${CUBO.y + CUBO.alto} L${CUBO.x + CUBO.ancho},${CUBO.y + CUBO.alto} L${CUBO.x + CUBO.ancho},${CUBO.y}`}
+    class="cubo"
+  />
+  {FICHAS.map((f) => <circle cx={f.cx} cy={f.cy} r="9" class="ficha" />)}
+  <Etiqueta x={CUBO.x + CUBO.ancho / 2} y={CUBO.y + CUBO.alto + 22} texto="burst · caben 200 fichas" estilo="titulo" />
+  <Etiqueta x={CUBO.x + CUBO.ancho / 2} y={CUBO.y + CUBO.alto + 40} texto="es el tamaño del cubo, no una tolerancia" />
+
+  {/* Las peticiones entran por la izquierda y cogen una ficha. */}
+  <Etiqueta x={24} y={100} texto="peticiones" estilo="titulo" ancla="start" />
+  {[0, 1, 2, 3].map((i) => (
+    <rect x={26 + i * 9} y={118} width="7" height="26" rx="1.5" class="peticion" />
+  ))}
+  <Flecha de={[76, 131]} a={[264, 131]} etiqueta="cada una coge una ficha" />
+
+  {/* Las dos salidas. */}
+  <Flecha de={[440, 112]} a={[556, 112]} />
+  <Etiqueta x={564} y={116} texto="hay ficha → pasa" estilo="bien" ancla="start" />
+
+  <Flecha de={[440, 192]} a={[556, 192]} tipo="fallo" />
+  <Etiqueta x={564} y={188} texto="cubo vacío →" estilo="peligro" ancla="start" />
+  <Etiqueta x={564} y={204} texto="429 Too Many Requests" estilo="peligro" ancla="start" />
+</Diagrama>
+
+<style>
+  .cubo { fill: none; stroke: var(--linea-fuerte); stroke-width: 2; stroke-linejoin: round; }
+  .ficha { fill: var(--bien-suave); stroke: #8cbf9d; stroke-width: 1.25; }
+  .peticion { fill: var(--papel-hondo); stroke: var(--linea-fuerte); stroke-width: 1; }
+</style>

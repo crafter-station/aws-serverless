@@ -8,6 +8,11 @@ intencion: Desacoplar a quien pide el trabajo de quien lo hace con una única co
 verificado_en: "2026-09-06"
 servicios: [sqs, lambda]
 relacionados:
+  - patron: throttling-y-rate-limiting
+    tipo: compite con
+    porque: >-
+      Las dos respuestas al exceso de tráfico. El throttle lo rechaza; la cola
+      lo guarda. Si el trabajo puede esperar, tirarlo es la peor de las dos.
   - patron: circuit-breaker
     tipo: compite con
     porque: >-
