@@ -1,7 +1,246 @@
 ---
 titulo: DLQ y redrive
+alias: Dead-letter queue
 familia: Fiabilidad
-estado: esbozo
+estado: listo
+dificultad: 1
+intencion: Apartar los mensajes que fallan una y otra vez para que dejen de bloquear al consumidor y de quemar dinero, y poder investigarlos y reinyectarlos cuando el bug esté arreglado.
+verificado_en: "2026-09-06"
+servicios: [sqs, sns, lambda]
+relacionados:
+  - patron: fan-out
+    tipo: se combina con
+    porque: >-
+      Cada rama de un fan-out necesita la suya. Y ojo con cuál: en SNS a SQS la
+      que atrapa tus bugs es la de la cola, no la de la suscripción.
+  - patron: idempotencia-en-consumidores
+    tipo: se combina con
+    porque: >-
+      El redrive reinyecta mensajes que quizá se procesaron a medias. Sin
+      idempotencia, vaciar una DLQ es una forma estupenda de duplicar efectos.
+  - patron: saga-orquestada-con-step-functions
+    tipo: compite con
+    porque: >-
+      Los dos gestionan el fallo persistente, pero en planos distintos: la DLQ
+      aparta el mensaje para que lo mire un humano; la saga define qué se
+      deshace automáticamente. Si el fallo tiene una compensación de negocio,
+      querías una saga.
 ---
 
-Por escribir.
+import DlqCiclo from '../../components/diagrama/DlqCiclo.astro';
+import Caja from '../../components/Caja.astro';
+
+## El problema
+
+Un mensaje entra en tu cola con un campo que tu código no espera. El consumidor
+lanza una excepción. El mensaje no se borra, así que al expirar el *visibility
+timeout* vuelve a la cola. Se vuelve a entregar. Vuelve a fallar.
+
+Eso, solo, no es un desastre: es lo que hace fiable a una cola. El desastre es
+que **no hay nada que detenga el bucle**. Sin una DLQ configurada, ese mensaje
+se reintentará hasta agotar la retención de la cola: por defecto cuatro días, y
+hasta catorce si alguien subió el valor.
+
+<DlqCiclo />
+
+Mientras tanto pasan tres cosas, y ninguna sale en un dashboard hasta que la
+buscas:
+
+- **Pagas por fallar.** Cada reintento es una invocación de Lambda y varias
+  peticiones de SQS. Un mensaje venenoso puede costarte miles de invocaciones
+  que están garantizadas a no servir para nada.
+- **Contamina los lotes.** Si tu función no reporta fallos parciales, ese
+  mensaje arrastra a los otros nueve del lote en cada vuelta.
+- **Envenena tus alarmas.** Tu tasa de error nunca baja, así que dejas de
+  mirarla, y el día que se rompe otra cosa no te enteras.
+
+Y al final el mensaje **desaparece**. A los cuatro días se borra por retención,
+sin avisar y sin dejar copia. El dato que necesitabas para entender el bug se ha
+ido.
+
+<Caja tipo="clave">
+Una DLQ no es un buzón de errores para consultar de vez en cuando. Es el
+**freno de un bucle** que, sin ella, no tiene final: gasta dinero, tapa tus
+métricas y acaba borrando la evidencia.
+</Caja>
+
+## La solución
+
+Una segunda cola y un número. En la *redrive policy* de la cola de origen
+declaras dos cosas: cuál es la DLQ y cuántas recepciones aguanta un mensaje
+antes de ir a parar allí (`maxReceiveCount`).
+
+Cuando la cuenta de recepciones supera ese número, SQS mueve el mensaje a la
+DLQ. El consumidor deja de verlo, el bucle se corta y el mensaje se conserva
+para que puedas mirarlo.
+
+La segunda mitad del patrón —la que más gente se salta— es el **redrive**: una
+vez arreglado el bug, SQS puede mover los mensajes de vuelta de la DLQ a la cola
+original para que se reprocesen. Una DLQ sin un plan de redrive es un cementerio
+con buenas vistas.
+
+## Cuándo usarlo
+
+- **Siempre que haya una cola SQS.** No hay un caso razonable en el que quieras
+  reintentos infinitos.
+- En **invocaciones asíncronas de Lambda**, donde el equivalente es un
+  *on-failure destination* (o una DLQ de función).
+- En **suscripciones de SNS**, con el matiz importante de la trampa 2.
+
+## Cuándo NO usarlo
+
+<Caja tipo="no">
+- **En una cola FIFO donde el orden es el requisito.** AWS lo advierte
+  explícitamente: apartar un mensaje rompe el orden de los que vienen detrás.
+  Si el orden es lo que estabas comprando al elegir FIFO, una DLQ te lo quita.
+- **Como sustituto de una compensación de negocio.** Una DLQ aparta el mensaje
+  y espera a que aparezca un humano. Si el fallo exige deshacer algo —liberar
+  el stock reservado, devolver el cobro— eso es una saga, no una DLQ.
+- **Con `maxReceiveCount` a 1**, salvo que sepas muy bien lo que haces. Un
+  timeout puntual del servicio de al lado mandaría el mensaje a la DLQ al
+  primer tropiezo, cuando el segundo intento habría funcionado.
+- **Sin alarma.** Una DLQ que nadie vigila es peor que no tenerla: te da la
+  sensación de estar cubierto mientras los mensajes se acumulan y caducan.
+</Caja>
+
+## Cómo implementarlo
+
+1. **Crea la DLQ primero.** Es una cola normal; lo que la convierte en DLQ es
+   que otra la referencie.
+2. **Del mismo tipo que la de origen** y —esto lo exige AWS— **en la misma
+   cuenta y la misma región**.
+3. **Dale más retención que a la cola de origen.** 14 días frente a los 4 por
+   defecto. La trampa 1 explica por qué no es opcional.
+4. **Fija `maxReceiveCount` entre 3 y 5.** Suficiente para absorber fallos
+   transitorios, poco para no quemar dinero.
+5. **Restringe quién puede usarla** con la *redrive allow policy*: `byQueue`
+   admite hasta 10 ARN de colas de origen.
+6. **Pon una alarma** sobre `ApproximateNumberOfMessagesVisible` de la DLQ, con
+   umbral 1. Cualquier mensaje ahí es una noticia.
+7. **Escribe el procedimiento de redrive** antes de necesitarlo.
+
+## El código
+
+```ts
+import * as cdk from 'aws-cdk-lib';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cw from 'aws-cdk-lib/aws-cloudwatch';
+
+const dlq = new sqs.Queue(this, 'ColaCobrosDlq', {
+  // Mas larga que la de origen: el mensaje llega con su timestamp
+  // original, no con uno nuevo. Ver trampas.
+  retentionPeriod: cdk.Duration.days(14),
+});
+
+const cola = new sqs.Queue(this, 'ColaCobros', {
+  retentionPeriod: cdk.Duration.days(4),
+  // Con margen sobre el timeout de la funcion: si el mensaje reaparece
+  // mientras la Lambda sigue viva, la cuenta de recepciones sube por
+  // una razon que no es un fallo.
+  visibilityTimeout: cdk.Duration.minutes(6),
+  deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },
+});
+
+// Una DLQ sin alarma es una falsa sensacion de seguridad.
+new cw.Alarm(this, 'AlarmaDlq', {
+  metric: dlq.metricApproximateNumberOfMessagesVisible({
+    period: cdk.Duration.minutes(5),
+    statistic: 'Maximum',
+  }),
+  threshold: 1,
+  evaluationPeriods: 1,
+  comparisonOperator: cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+  treatMissingData: cw.TreatMissingData.NOT_BREACHING,
+});
+```
+
+## Te va a morder
+
+<Caja tipo="trampa" titulo="1 · El reloj de retención NO se reinicia">
+Esta es la que se lleva por delante las investigaciones. En **colas estándar**,
+la caducidad de un mensaje se calcula siempre desde su *enqueue timestamp*
+original, y mover el mensaje a la DLQ **no lo cambia**.
+
+El ejemplo es de la propia documentación de AWS: si un mensaje pasa 1 día en la
+cola de origen y tu DLQ tiene 4 días de retención, se borrará de la DLQ **3 días
+después**, no 4.
+
+Con los valores por defecto la cuenta sale fatal: cola de origen a 4 días, DLQ a
+4 días, un mensaje que tardó 3 días en agotar sus reintentos... y te queda un
+día para darte cuenta. Por eso la DLQ debe tener **más** retención que la cola
+de origen, no la misma.
+
+En colas **FIFO** el comportamiento es el contrario: ahí el timestamp sí se
+reinicia al entrar en la DLQ. Dos servicios, dos reglas opuestas.
+</Caja>
+
+<Caja tipo="trampa" titulo="2 · La DLQ de SNS casi nunca es la que quieres">
+Con un fan-out hay dos sitios donde poner una DLQ y no atrapan lo mismo:
+
+- La **DLQ de la suscripción SNS** recoge lo que SNS no logró *entregar a la
+  cola*.
+- La **redrive policy de la cola SQS** recoge lo que tu *consumidor* no logró
+  procesar.
+
+Y hay un dato que decide la cuestión: a destinos gestionados por AWS —SQS y
+Lambda— SNS reintenta **100 015 veces a lo largo de 23 días**. Para que su DLQ
+llegue a dispararse, la entrega tendría que fallar durante más de tres semanas
+seguidas. Eso es una cola borrada o unos permisos rotos, nunca un bug tuyo.
+
+Si solo vas a configurar una, configura la de SQS.
+</Caja>
+
+<Caja tipo="trampa" titulo="3 · El visibility timeout infla la cuenta de recepciones">
+`maxReceiveCount` cuenta **recepciones**, no fallos. Si tu visibility timeout es
+más corto que lo que tarda la función, el mensaje reaparece mientras la primera
+invocación sigue trabajando: la cuenta sube sin que nada haya fallado.
+
+Con `maxReceiveCount: 3` y un timeout mal puesto, un mensaje perfectamente
+sano acaba en la DLQ mientras tres invocaciones lo procesan en paralelo. Has
+conseguido lo peor de los dos mundos: efecto triplicado y un mensaje marcado
+como venenoso.
+</Caja>
+
+<Caja tipo="trampa" titulo="4 · Vaciar la DLQ duplica efectos">
+El redrive reinyecta los mensajes en la cola original. Algunos de ellos **se
+procesaron a medias** antes de fallar: el cobro salió y lo que reventó fue el
+correo posterior.
+
+Reinyectar sin consumidores idempotentes es la forma más rápida de convertir un
+incidente en dos. Antes de darle al botón de redrive, asegúrate de que el
+consumidor sabe reconocer lo que ya hizo.
+</Caja>
+
+<Caja tipo="trampa" titulo="5 · El mensaje ya movido no vuelve a la cola sola">
+Un detalle documentado y poco conocido: en colas estándar con
+`maxReceiveCount` mayor que 3, cuando un mensaje se recibe 3 veces o más sin
+borrarse, SQS lo **manda al final de la cola**. La métrica
+`ApproximateAgeOfOldestMessage` pasa entonces a reflejar la edad del siguiente
+mensaje, no la del atascado.
+
+Consecuencia práctica: esa métrica no sirve para detectar un mensaje venenoso.
+Lo que lo detecta es la profundidad de la DLQ.
+</Caja>
+
+## Coste
+
+Una DLQ vacía **no cuesta prácticamente nada**: las colas no se facturan por
+existir ni por almacenar, solo por peticiones, y a una DLQ ociosa nadie le
+manda peticiones salvo tu alarma de CloudWatch.
+
+Lo caro es **no tenerla**. La cuenta de un mensaje venenoso sin freno, con la
+retención por defecto de 4 días y un visibility timeout de 30 segundos, son del
+orden de **once mil reintentos** — cada uno con su invocación de Lambda y sus
+peticiones de SQS. Por un solo mensaje. Multiplícalo por el número de mensajes
+que trae un despliegue con un bug de deserialización.
+
+## Fuentes
+
+Política de redrive, `maxReceiveCount`, redrive allow policy, requisito de misma
+cuenta y región, comportamiento del timestamp de retención en colas estándar y
+FIFO, y el reordenado al final de la cola:
+[Using dead-letter queues in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html).
+Retención por defecto y máxima de una cola:
+[Amazon SQS message quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html).
+Política de reintentos de SNS a destinos gestionados:
+[Amazon SNS message delivery retries](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html).

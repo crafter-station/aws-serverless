@@ -1,0 +1,25 @@
+---
+import Diagrama from './Diagrama.astro';
+import Nodo from './Nodo.astro';
+import Flecha from './Flecha.astro';
+import Etiqueta from './Etiqueta.astro';
+---
+
+<Diagrama
+  ancho={700}
+  alto={370}
+  titulo="El consumidor recibe un mensaje de la cola y falla. El mensaje vuelve a la cola al expirar el visibility timeout y se reintenta. Cuando la cuenta de recepciones supera maxReceiveCount, SQS lo mueve a la dead-letter queue."
+  pie="<strong>La DLQ no es un buzón de errores: es el freno de un bucle.</strong> Sin ella, un mensaje que siempre falla se reintenta hasta agotar la retención — hasta 14 días de invocaciones que fallan y se facturan."
+>
+  <Nodo x={40}  y={130} icono="amazon-simple-queue-service" titulo="cola-cobros" sub="maxReceiveCount: 3" />
+  <Nodo x={286} y={130} icono="aws-lambda" titulo="cobrarPedido" sub="lanza excepción" />
+  <Nodo x={530} y={130} icono="amazon-simple-queue-service" titulo="cola-cobros-dlq" sub="retención más larga" />
+
+  <Flecha de={[94, 148]} a={[284, 148]} curva={-16} etiqueta="recibe · intentos 1, 2 y 3" ey={-11} />
+  <Flecha de={[284, 176]} a={[96, 176]} curva={-24} etiqueta="falla · reaparece al expirar el visibility timeout" ey={46} tipo="fallo" />
+
+  <Flecha de={[340, 148]} a={[528, 148]} curva={-14} etiqueta="4ª recepción" ey={-11} tipo="evento" />
+
+  <Etiqueta x={350} y={300} texto="El mensaje entra en la DLQ conservando su timestamp de entrada original (colas estándar)" />
+  <Etiqueta x={350} y={324} texto="Si pasó 1 día en la cola de origen, en una DLQ con 4 días de retención le quedan 3" estilo="peligro" />
+</Diagrama>

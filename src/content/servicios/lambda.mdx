@@ -1,7 +1,226 @@
 ---
 titulo: Lambda
+nombre_completo: AWS Lambda
 icono: aws-lambda
-estado: esbozo
+estado: listo
+en_una_frase: >-
+  Ejecuta tu función cuando ocurre algo y te cobra por milisegundo, pero no
+  escala por peticiones por segundo: escala por cuántas cosas está haciendo a
+  la vez.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: Concurrencia, no peticiones por segundo
+    explicacion: >-
+      La unidad de escalado es cuántas invocaciones están en vuelo al mismo
+      tiempo, no cuántas llegan. 100 peticiones por segundo que duran 200 ms
+      son 20 de concurrencia; si la duración sube a 2 s, las mismas 100
+      peticiones son 200. El límite por defecto son 1 000 concurrentes y se
+      reparte entre todas las funciones de la cuenta en esa región.
+  - termino: La memoria compra CPU
+    explicacion: >-
+      El ajuste de memoria no es solo RAM: AWS asigna CPU en proporción, y a
+      1 769 MB tu función tiene el equivalente a una vCPU. Subir la memoria
+      puede salir gratis o incluso barato, porque se factura por GB-segundo y
+      el doble de CPU suele recortar la duración a la mitad.
+  - termino: El entorno de ejecución se reutiliza
+    explicacion: >-
+      Entre invocaciones, el proceso sigue vivo. Lo que declaras fuera del
+      handler persiste —clientes de SDK, conexiones, cachés— y también persiste
+      /tmp. De ahí sale el cold start, y de ahí sale la optimización más
+      rentable: crear los clientes una vez, no en cada invocación.
+limites:
+  - concepto: Ejecuciones concurrentes
+    valor: 1 000 por región
+    tipo: soft
+    nota: >-
+      Ampliable a decenas de miles. Se comparte entre todas las funciones de la
+      cuenta: una función desbocada puede dejar sin cupo a las demás.
+  - concepto: Cuenta nueva
+    valor: cuota reducida
+    tipo: soft
+    nota: >-
+      AWS avisa de que las cuentas nuevas arrancan con cuotas de concurrencia y
+      memoria más bajas, y las sube automáticamente según el uso. No des por
+      hecho el 1 000 en una cuenta recién creada.
+  - concepto: Timeout de la función
+    valor: 900 segundos (15 minutos)
+    tipo: hard
+  - concepto: Memoria
+    valor: de 128 MB a 10 240 MB
+    tipo: hard
+    nota: En incrementos de 1 MB. A 1 769 MB equivale a una vCPU.
+  - concepto: Velocidad de escalado
+    valor: 1 000 entornos cada 10 segundos por función
+    tipo: hard
+  - concepto: Payload de invocación síncrona
+    valor: 6 MB petición y 6 MB respuesta
+    tipo: hard
+  - concepto: Payload de invocación asíncrona
+    valor: 1 MB
+    tipo: hard
+    nota: Seis veces menos que en síncrono. Es un techo distinto y sorprende a todo el mundo una vez.
+  - concepto: Respuesta en streaming
+    valor: 200 MB
+    tipo: hard
+    nota: Sin límite de ancho de banda los primeros 6 MB; a partir de ahí, 2 MB/s.
+  - concepto: Paquete de despliegue .zip
+    valor: 50 MB comprimido · 250 MB descomprimido
+    tipo: hard
+    nota: Los 250 MB incluyen las capas y los runtimes personalizados.
+  - concepto: Imagen de contenedor
+    valor: 10 GB
+    tipo: hard
+  - concepto: Almacenamiento /tmp
+    valor: de 512 MB a 10 240 MB
+    tipo: hard
+  - concepto: Variables de entorno
+    valor: 4 KB en total
+    tipo: hard
+    nota: Sumando todas. Es poco, y es la razón por la que la configuración grande acaba en Parameter Store.
+  - concepto: Capas por función
+    valor: 5
+    tipo: hard
+  - concepto: Política basada en recursos
+    valor: 20 KB
+    tipo: hard
+  - concepto: Descriptores de fichero y procesos
+    valor: 1 024
+    tipo: hard
+  - concepto: Ancho de banda por entorno de ejecución
+    valor: 625 Mbps
+    tipo: soft
+    nota: Ampliable solo para funciones fuera de VPC; escala con la memoria a partir de 2 048 MB.
+  - concepto: Almacenamiento de funciones y capas
+    valor: 300 GB descomprimido
+    tipo: hard
+    nota: No se amplía. Para más, hay que usar almacenamiento propio en S3.
+  - concepto: API del plano de control
+    valor: 15 peticiones por segundo
+    tipo: hard
+    nota: >-
+      En total entre todas las APIs, no por API. Los despliegues masivos chocan
+      aquí. GetFunction va aparte, a 100/s.
 ---
 
-Por escribir.
+## Modelo mental
+
+La pregunta con la que casi todo el mundo llega a Lambda es *"¿cuántas
+peticiones por segundo aguanta?"*, y esa pregunta no tiene respuesta, porque
+**Lambda no escala por peticiones por segundo**. Escala por concurrencia:
+cuántas invocaciones hay en vuelo simultáneamente.
+
+La conversión es una multiplicación y conviene tenerla en los dedos:
+
+> **concurrencia ≈ peticiones por segundo × duración media en segundos**
+
+100 peticiones por segundo que tardan 200 ms son 20 de concurrencia. Las mismas
+100 peticiones, si la duración se va a 2 segundos, son 200. **Tu función se ha
+vuelto diez veces más cara de escalar sin que el tráfico se moviera.** Por eso
+una dependencia lenta no solo hace tu API lenta: te acerca al techo de la
+cuenta.
+
+Y ese techo —1 000 concurrentes por defecto— es **de la región, no de la
+función**. Todas tus funciones comparten el mismo bote. Una que se atasca
+llamando a un servicio caído puede acumular cientos de invocaciones esperando y
+dejar sin cupo al resto de tu sistema, que estaba perfectamente sano. Es el
+modo de fallo más desagradable de Lambda porque cruza fronteras entre equipos.
+
+La defensa es la **concurrencia reservada**: apartar un trozo del bote para una
+función. Tiene doble efecto y los dos son útiles: le garantiza ese cupo y, a la
+vez, le impide pasar de ahí.
+
+### El entorno de ejecución sobrevive
+
+Entre invocaciones, tu proceso sigue vivo. Lo que está fuera del handler se
+ejecuta una vez por entorno, no una vez por invocación, y de ahí salen dos
+cosas:
+
+- **El cold start**, que es el tiempo de arrancar un entorno nuevo. Solo lo
+  pagan las invocaciones que no encuentran uno libre.
+- **La optimización más rentable que existe en Lambda**: crear los clientes del
+  SDK, abrir las conexiones y cargar la configuración *fuera* del handler. Se
+  hace una vez y lo aprovechan las cientos de invocaciones siguientes.
+
+`/tmp` también persiste entre invocaciones del mismo entorno. Es útil como caché
+y es una trampa si supones que está vacío.
+
+## Cómo te factura
+
+Dos conceptos que se suman:
+
+| Concepto | Precio aproximado |
+| --- | --- |
+| Invocaciones | ~0,20 USD / millón |
+| Duración | por GB-segundo, según memoria configurada |
+| Concurrencia aprovisionada | se paga esté ociosa o no |
+
+Lo interesante es que **subir la memoria puede salir gratis**. Como AWS asigna
+CPU en proporción y la duración se factura en GB-segundo, si doblas la memoria y
+la función tarda la mitad, el coste de duración es idéntico — y tu latencia se
+ha reducido a la mitad. Por debajo de 1 769 MB tienes menos de una vCPU, así que
+cualquier función que haga trabajo de CPU de verdad y esté en 256 MB casi seguro
+está *pagando más* por ir despacio.
+
+La conclusión práctica: **medir con distintas memorias no es una micro-
+optimización, es de las primeras cosas que hacer**. La intuición de "menos
+memoria, más barato" es falsa en cuanto la función hace algo más que esperar.
+
+La concurrencia aprovisionada es el otro lado: elimina el cold start pero se
+factura por tenerla reservada, haya tráfico o no. Es un coste fijo dentro de un
+servicio que vendes como coste variable.
+
+## Cuándo NO usarlo
+
+- **El trabajo pasa de 15 minutos.** El timeout es un muro que no se levanta.
+  Para procesos largos: Step Functions troceando, Fargate o Batch.
+- **Carga alta, constante y predecible.** El modelo de Lambda paga un sobreprecio
+  por invocación a cambio de escalar a cero. Si nunca escalas a cero y el
+  tráfico es plano, un contenedor siempre encendido sale más barato.
+- **El p99 no tolera cold starts** y no quieres pagar concurrencia
+  aprovisionada.
+- **Necesitas conexiones persistentes de larga duración**, GPU, o más de
+  10 240 MB de memoria.
+- **Dependes de estado en memoria entre invocaciones.** El entorno se reutiliza,
+  pero no está garantizado: cachear ahí está bien, *depender* de ello no.
+
+## Errores comunes
+
+**Crear el cliente del SDK dentro del handler.** Se paga la construcción, el
+TLS y la resolución de credenciales en cada invocación en vez de una vez por
+entorno. Es el error de rendimiento más común y el más fácil de arreglar: subir
+dos líneas de sitio.
+
+**Dar por hecho los 1 000 de concurrencia en una cuenta nueva.** AWS lo dice
+explícitamente: las cuentas nuevas arrancan con cuotas reducidas y las sube
+automáticamente según el uso. Tu prueba de carga en la cuenta de sandbox no
+mide lo que crees.
+
+**No poner concurrencia reservada en las funciones peligrosas.** La que consume
+una cola con un backlog enorme, o la que llama a un tercero lento, son las
+candidatas a comerse el bote entero.
+
+**Confundir los dos límites de payload.** Síncrono son 6 MB; **asíncrono, 1 MB**.
+El mismo evento que funciona detrás de API Gateway puede ser rechazado
+invocando la función de forma asíncrona.
+
+**Chocar con los 250 MB descomprimidos.** El paquete comprimido son 50 MB, pero
+el límite que se alcanza de verdad es el de 250 MB descomprimido *incluyendo las
+capas*. Un par de librerías de ciencia de datos y ya estás fuera.
+
+**Meter la configuración en variables de entorno.** El total son 4 KB sumando
+todas. Es menos de lo que parece en cuanto hay un par de ARN largos y una clave
+pública.
+
+**Desplegar cien funciones a la vez.** El resto del plano de control va a
+**15 peticiones por segundo en total entre todas las APIs**, y no se amplía. Un
+despliegue masivo se estrangula ahí, y el error que ves no dice nada de eso.
+
+## Fuentes
+
+Todas las cuotas —concurrencia, timeout, memoria, payloads síncrono y
+asíncrono, paquetes de despliegue, `/tmp`, variables de entorno, capas, ancho de
+banda y límites del plano de control—, la relación entre memoria y vCPU y el
+aviso sobre cuotas reducidas en cuentas nuevas:
+[Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html).
+Los importes proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente: trátalos como orden de magnitud.
