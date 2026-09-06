@@ -1,0 +1,222 @@
+---
+titulo: Kinesis Data Streams
+nombre_completo: Amazon Kinesis Data Streams
+icono: amazon-kinesis-data-streams
+estado: listo
+en_una_frase: >-
+  Un registro ordenado y duradero de eventos que varios consumidores pueden
+  releer a su ritmo: a diferencia de una cola, leer no borra, y lo escrito se
+  queda hasta un año.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: El shard es la unidad de todo
+    explicacion: >-
+      Capacidad, orden y paralelismo se miden en shards. Cada uno admite 1 MB/s
+      o 1 000 registros por segundo de escritura, y 2 MB/s o 2 000 de lectura.
+      Escalar es cambiar el número de shards, y la partition key decide en cuál
+      cae cada registro — con los mismos problemas de reparto que en DynamoDB.
+  - termino: Leer no borra
+    explicacion: >-
+      Es la diferencia de fondo con SQS. El registro se queda en el stream hasta
+      que caduca, y cada consumidor lleva su propia posición. Por eso varios
+      consumidores independientes pueden leer lo mismo, y por eso se puede
+      volver atrás y reprocesar.
+  - termino: El orden existe, pero solo dentro de un shard
+    explicacion: >-
+      Los registros con la misma partition key van al mismo shard y se leen en
+      el orden en que se escribieron. Entre shards distintos no hay ninguna
+      garantía. Elegir la partition key es elegir qué cosas están ordenadas
+      entre sí.
+limites:
+  - concepto: Escritura por shard
+    valor: 1 MB/s · 1 000 registros/s
+    tipo: hard
+    nota: Superarlo devuelve ProvisionedThroughputExceededException. Se escala añadiendo shards.
+  - concepto: Lectura por shard
+    valor: 2 MB/s · 2 000 registros/s
+    tipo: hard
+    nota: Repartidos entre todos los consumidores estándar de ese shard.
+  - concepto: Tamaño de un registro
+    valor: hasta 10 MiB antes de base64
+    tipo: hard
+    nota: Kinesis está diseñado para absorber registros grandes esporádicos con capacidad de ráfaga.
+  - concepto: Retención
+    valor: 24 horas por defecto · hasta 8 760 horas (365 días)
+    tipo: hard
+    nota: >-
+      Es la diferencia que decide frente a DynamoDB Streams (24 h) y SQS
+      (14 días).
+  - concepto: GetRecords
+    valor: 10 MB o 10 000 registros por llamada
+    tipo: hard
+    nota: >-
+      Si una llamada devuelve 10 MB, las siguientes dentro de 5 segundos lanzan
+      excepción.
+  - concepto: Transacciones de lectura por shard
+    valor: 5 por segundo
+    tipo: hard
+    nota: Con cinco consumidores estándar leyendo, cada uno puede sondear una vez por segundo.
+  - concepto: PutRecords
+    valor: 500 registros · 10 MiB por petición
+    tipo: hard
+    nota: Incluidas las partition keys.
+  - concepto: Consumidores registrados (enhanced fan-out)
+    valor: 20 por stream · 50 en On-demand Advantage
+    tipo: soft
+    nota: Cada uno con sus propios 2 MB/s, sin competir por la lectura del shard.
+  - concepto: Shards por cuenta — us-east-1, us-west-2, eu-west-1
+    valor: 20 000
+    tipo: soft
+  - concepto: Shards por cuenta — resto de regiones
+    valor: 1 000 o 6 000
+    tipo: soft
+  - concepto: On-demand · throughput inicial
+    valor: 4 MB/s escritura · 8 MB/s lectura
+    tipo: soft
+    nota: Escala solo con el tráfico, pero parte de ahí.
+  - concepto: On-demand · techo en las tres regiones grandes
+    valor: 10 GB/s escritura · 20 GB/s lectura
+    tipo: soft
+  - concepto: On-demand · techo en el resto
+    valor: 200 MB/s escritura · 400 MB/s lectura
+    tipo: soft
+    nota: Ampliable a 10 GB/s con un ticket.
+  - concepto: Streams en modo on-demand
+    valor: 50 por cuenta
+    tipo: soft
+  - concepto: Cambios entre on-demand y aprovisionado
+    valor: 2 veces cada 24 horas
+    tipo: hard
+  - concepto: Caducidad de un shard iterator
+    valor: 5 minutos
+    tipo: hard
+    nota: Es la causa habitual del ExpiredIteratorException en consumidores lentos.
+---
+
+import Caja from '../../components/Caja.astro';
+
+## Modelo mental
+
+Si SQS es un buzón y SNS un altavoz, Kinesis es **un cuaderno**. Los registros se
+escriben en orden, se quedan escritos, y cualquiera puede volver atrás y releer
+desde donde quiera.
+
+Esa es la diferencia de fondo con una cola, y de ella salen todas las demás:
+
+| | SQS | Kinesis |
+| --- | --- | --- |
+| Leer | consume | no consume |
+| Varios consumidores | se reparten el trabajo | cada uno lee **todo** |
+| Volver atrás | imposible | mover el iterador |
+| Retención máxima | 14 días | **365 días** |
+| Orden | best-effort (estándar) | garantizado por shard |
+| Escalar | añadir consumidores | añadir shards |
+
+Un consumidor de Kinesis no borra nada: lleva su propia **posición** en el
+stream. Por eso pueden convivir varios sin coordinarse, y por eso reprocesar
+seis meses de eventos es mover un puntero y no un proyecto.
+
+### El shard es donde vive todo
+
+La capacidad no se pide: se compra en shards. Cada uno admite **1 MB/s o 1 000
+registros por segundo** de escritura y **2 MB/s** de lectura, y esos 2 MB se
+**reparten entre todos los consumidores estándar** de ese shard. Tres
+consumidores compitiendo por el mismo shard no tienen 2 MB/s cada uno: tienen
+2 MB/s entre los tres.
+
+De ahí sale *enhanced fan-out*: un consumidor registrado obtiene **sus propios
+2 MB/s** y recibe los datos empujados en vez de sondearlos. Cuestan aparte y hay
+un tope de 20 por stream, pero es la respuesta cuando varios consumidores se
+estorban.
+
+Y el shard es también donde vive el **orden**. Los registros con la misma
+partition key caen en el mismo shard y se leen en el orden en que se
+escribieron. Entre shards distintos no hay ninguna garantía. Elegir la partition
+key es, literalmente, elegir qué cosas están ordenadas entre sí — y trae consigo
+el mismo problema de particiones calientes que en DynamoDB.
+
+<Caja tipo="clave" titulo="Dónde encaja en este catálogo">
+Kinesis aparece en seis fichas como la
+respuesta a *"cuándo NO usar esto"*: cuando hace falta releer el pasado, cuando
+el orden importa de verdad, cuando 24 horas de DynamoDB Streams o 14 días de SQS
+se quedan cortos. Ninguno de los catorce patrones lo usa directamente, y eso es
+deliberado: los patrones de este catálogo son de mensajería, y Kinesis es de
+*streaming*. Se parecen menos de lo que sugiere que ambos "muevan eventos".
+</Caja>
+
+## Cómo te factura
+
+Dos modelos, y elegir mal es caro en las dos direcciones:
+
+| Modo | Cómo se paga |
+| --- | --- |
+| Aprovisionado | por **shard-hora**, se use o no, más peticiones |
+| On-demand | por GB ingerido y recuperado, más una tarifa por stream-hora |
+| Retención extendida | aparte, y sube con los días |
+| Enhanced fan-out | por consumidor-shard-hora y por GB recuperado |
+
+La forma de la factura es lo que hay que entender: **el modo aprovisionado cobra
+por capacidad reservada, no por uso**. Un stream con diez shards a las tres de
+la madrugada cuesta lo mismo que a mediodía. Es barato si el tráfico es constante
+y caro si es irregular.
+
+On-demand escala solo, pero parte de **4 MB/s de escritura** y sube según el
+tráfico. Si tu carga llega de golpe desde cero, los primeros minutos pueden
+estrangularse mientras escala.
+
+Dos costes que aparecen tarde: la **retención extendida** se paga por cada día
+por encima de las 24 horas —guardar un año no es gratis— y el **enhanced fan-out**
+se factura por consumidor y por shard, así que multiplica.
+
+## Cuándo NO usarlo
+
+- **Es una cola de tareas.** Si lo que quieres es repartir trabajo entre
+  obreros, SQS es más simple, más barato y no te obliga a gestionar shards ni
+  posiciones.
+- **Fan-out sencillo a unos pocos destinos.** SNS entrega a servicios
+  gestionados sin coste de entrega y sin que gestiones nada.
+- **El tráfico es irregular y bajo.** Un shard aprovisionado cuesta lo mismo
+  vacío que lleno. Con picos aislados, on-demand o directamente una cola.
+- **No necesitas orden ni releer.** Son las dos cosas por las que se paga la
+  complejidad de Kinesis. Sin ellas, estás pagando de más.
+- **Quieres enrutado por contenido.** Kinesis entrega todo a todos los
+  consumidores del shard; filtrar es trabajo del consumidor. Eso es EventBridge.
+
+## Errores comunes
+
+**Tratarlo como una cola.** Es el error conceptual: en Kinesis leer no borra, no
+hay visibility timeout, no hay DLQ nativa y no hay "mensaje procesado". El
+progreso lo lleva el consumidor y hay que guardarlo en algún sitio.
+
+**Una partition key con poca cardinalidad.** `pais` o `tipo` concentran todo en
+unos pocos shards. Es el mismo problema que la partición caliente de DynamoDB, y
+la solución también es la misma: repartir la clave.
+
+**Suponer 2 MB/s por consumidor.** Ese es el techo **del shard**, repartido entre
+todos los consumidores estándar. El tercer consumidor no ralentiza un poco a los
+otros dos: se lleva un tercio.
+
+**Ignorar el `IteratorAge`.** Es la métrica que dice cuánto se ha quedado atrás
+tu consumidor. Si crece, estás perdiendo terreno, y cuando supere la retención
+**empezarás a perder registros sin ningún error**.
+
+**Dejar caducar el shard iterator.** Caduca a los **5 minutos**. Un consumidor
+que tarda más entre llamadas se encuentra un `ExpiredIteratorException` que no
+explica gran cosa.
+
+**Cambiar de modo a la ligera.** Solo se puede alternar entre on-demand y
+aprovisionado **dos veces cada 24 horas**. No es una palanca para ir probando.
+
+## Fuentes
+
+Throughput por shard, tamaño de registro, retención mínima y máxima, límites de
+`GetRecords` y `PutRecords`, transacciones de lectura por shard, consumidores
+registrados, cuotas de shards y de throughput on-demand por región, cambios de
+modo y caducidad del shard iterator:
+[Quotas and limits — Amazon Kinesis Data Streams](https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html).
+Retención de DynamoDB Streams usada en la comparación:
+[Core components of Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html).
+Retención de SQS:
+[Amazon SQS message quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html).
+Los modelos de precio proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente.
