@@ -1,0 +1,190 @@
+---
+titulo: Route 53
+nombre_completo: Amazon Route 53
+icono: amazon-route-53
+estado: listo
+en_una_frase: >-
+  El DNS gestionado de AWS, que además de traducir nombres decide a qué destino
+  mandar a cada usuario y deja de mandarlo a los que no responden.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: Es DNS, y el DNS lo cachean otros
+    explicacion: >-
+      Route 53 responde una consulta y el resultado se queda en cachés que no
+      controlas — el resolver del operador, el sistema operativo, el navegador—
+      durante lo que diga el TTL. Por eso un cambio de DNS nunca es instantáneo,
+      y por eso el TTL es la palanca que decide cuánto tarda un failover.
+  - termino: Un registro alias no es un CNAME
+    explicacion: >-
+      El alias es un tipo propio de Route 53 que apunta a un recurso de AWS
+      —CloudFront, un balanceador, un bucket de web estática— y que sí funciona
+      en el ápice del dominio, donde el protocolo DNS prohíbe un CNAME. Es la
+      forma correcta de poner "ejemplo.com" delante de una distribución.
+  - termino: Las políticas de enrutado son la mitad del producto
+    explicacion: >-
+      No solo devuelve una IP: puede repartir por peso, por latencia, por
+      geografía o con conmutación por error. Combinado con health checks, el DNS
+      pasa de ser una tabla de nombres a ser una pieza de la arquitectura de
+      disponibilidad.
+limites:
+  - concepto: Zonas alojadas por cuenta
+    valor: 500
+    tipo: soft
+  - concepto: Registros por zona alojada
+    valor: 10 000
+    tipo: soft
+  - concepto: Health checks por cuenta
+    valor: 200
+    tipo: soft
+  - concepto: Health checks hijos de un health check calculado
+    valor: 255
+    tipo: hard
+  - concepto: Dominios registrables con la cuenta
+    valor: 20
+    tipo: soft
+  - concepto: VPC asociadas a una zona alojada privada
+    valor: 300
+    tipo: soft
+  - concepto: Conjuntos de delegación reutilizables
+    valor: 100 · 100 zonas por conjunto
+    tipo: soft
+  - concepto: Políticas de traffic flow
+    valor: 50 · 5 registros de política
+    tipo: soft
+  - concepto: Colecciones CIDR
+    valor: 5 · 1 000 bloques por colección
+    tipo: soft
+  - concepto: Resolver · endpoints por región
+    valor: 4 · 6 direcciones IP por endpoint
+    tipo: soft
+  - concepto: Resolver · reglas por región
+    valor: 1 000
+    tipo: soft
+  - concepto: Resolver · IP de destino por regla
+    valor: 6
+    tipo: hard
+  - concepto: DNS Firewall · grupos de reglas por VPC
+    valor: 5
+    tipo: hard
+  - concepto: DNS Firewall · reglas por grupo
+    valor: 100
+    tipo: soft
+  - concepto: Región del endpoint de la API
+    valor: us-east-1
+    tipo: hard
+    nota: >-
+      Route 53 es global pero su plano de control vive en Virginia. Las llamadas
+      se firman contra us-east-1 aunque tus recursos estén en otra región.
+---
+
+import Caja from '../../components/Caja.astro';
+
+## Modelo mental
+
+Route 53 es **DNS gestionado con opiniones**. La parte de DNS es la de siempre:
+alguien pregunta por un nombre y el servicio devuelve un registro. Lo que añade
+AWS es *quién* recibe qué respuesta, y qué pasa cuando un destino deja de
+funcionar.
+
+Y hay una propiedad del DNS que conviene tener presente antes que cualquier
+límite: **la respuesta la cachean otros**. El resolver del operador, el sistema
+operativo y el navegador guardan el resultado durante lo que diga el TTL, y ni
+Route 53 ni tú podéis invalidarlo.
+
+Eso significa que **un cambio de DNS nunca es instantáneo**, y que el TTL es una
+decisión de arquitectura: TTL alto significa menos consultas y menos factura,
+pero también un failover lento. TTL bajo significa lo contrario. Antes de una
+migración planificada se baja el TTL con días de antelación; después se vuelve a
+subir.
+
+### Alias, no CNAME
+
+Es la distinción práctica que más se usa. El protocolo DNS **prohíbe un CNAME en
+el ápice de un dominio** —`ejemplo.com` a secas—, así que apuntar la raíz a una
+distribución de CloudFront no se puede hacer con DNS estándar.
+
+Route 53 resuelve eso con el **registro alias**, que es un tipo propio suyo:
+apunta a un recurso de AWS y se resuelve internamente, así que funciona en el
+ápice. Es la forma correcta de poner tu dominio delante de CloudFront, de un
+balanceador o de un bucket de web estática.
+
+### El DNS como pieza de disponibilidad
+
+Las políticas de enrutado convierten la zona en algo más que una tabla:
+
+| Política | Para qué |
+| --- | --- |
+| Simple | una respuesta y ya |
+| Ponderada | repartir por porcentaje — despliegues progresivos |
+| Latencia | mandar a cada usuario a la región que le responde antes |
+| Geolocalización | cumplimiento, idioma, contenido por país |
+| Conmutación por error | primario y secundario, con health check |
+| Multivalor | varias respuestas sanas, un balanceo pobre pero barato |
+
+Combinadas con **health checks**, el DNS deja de ser infraestructura pasiva:
+Route 53 deja de devolver la dirección de lo que no responde. Con la salvedad
+del TTL: los clientes que ya tienen la respuesta cacheada seguirán yendo al
+destino caído hasta que caduque.
+
+## Cómo te factura
+
+| Concepto | Cómo se paga |
+| --- | --- |
+| Zona alojada | por zona y mes |
+| Consultas DNS | por millón, con tramos |
+| Consultas resueltas por un alias a un recurso de AWS | **sin coste** |
+| Health checks | por check y mes, más caros los que miran fuera de AWS |
+| Registro de dominios | tarifa anual del TLD |
+
+Dos cosas que conviene saber: las consultas contra un **registro alias que
+apunta a un recurso de AWS no se facturan**, lo que da otra razón para preferir
+alias sobre CNAME. Y las **zonas alojadas se cobran aunque no reciban una sola
+consulta** — las zonas de proyectos muertos son una línea silenciosa clásica.
+
+## Cuándo NO usarlo
+
+- **Ya tienes el DNS en otro sitio y funciona.** Migrar una zona es delicado y
+  el beneficio es marginal salvo que quieras alias o health checks.
+- **Necesitas balanceo real.** El DNS reparte respuestas, no tráfico: no ve las
+  peticiones, no conoce la carga de cada destino y no puede reaccionar en
+  segundos. Para eso está un balanceador.
+- **Necesitas failover en segundos.** Entre el health check, la propagación y el
+  TTL cacheado por terceros, la conmutación es de minutos.
+- **Solo quieres un dominio para un experimento.** Un registro CNAME en el DNS
+  que ya tengas es suficiente y gratis.
+
+## Errores comunes
+
+**Poner un TTL alto y luego querer migrar rápido.** Los clientes tienen la
+respuesta vieja cacheada durante el TTL, y no hay forma de purgarla. Baja el TTL
+*antes* de la ventana de cambio.
+
+**Usar CNAME donde tocaba alias.** Además de no funcionar en el ápice, cada
+consulta CNAME se factura y la del alias a un recurso de AWS no.
+
+**Creer que el failover es inmediato.** Health check + propagación + TTL de
+terceros. Si el requisito es sub-segundo, el DNS no es la herramienta.
+
+**Dejar zonas alojadas huérfanas.** Se cobran por existir, tengan tráfico o no.
+
+**Confundir la zona privada con la pública.** Una zona privada solo resuelve
+dentro de las VPC asociadas —hasta 300—. Desde fuera no existe, y el síntoma es
+un `NXDOMAIN` que parece un problema de propagación.
+
+**Firmar contra la región equivocada.** Route 53 es global pero su API vive en
+**us-east-1**. Un SDK configurado en otra región falla de forma poco
+descriptiva.
+
+**Contar con enrutado por latencia sin medir.** Route 53 usa sus propias
+mediciones de latencia entre redes y regiones, no las de tu usuario concreto. Es
+una buena aproximación, no una garantía.
+
+## Fuentes
+
+Zonas alojadas, registros por zona, health checks y sus hijos, dominios,
+VPC por zona privada, conjuntos de delegación, políticas de traffic flow,
+colecciones CIDR, y las cuotas de Resolver y de DNS Firewall:
+[Amazon Route 53 endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/r53.html).
+El endpoint de la API y la región con la que se firman las peticiones proceden
+de esa misma página. Los importes proceden de la página de precios de AWS, que
+se renderiza dinámicamente y no pudo citarse literalmente.

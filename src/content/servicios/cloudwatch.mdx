@@ -1,0 +1,252 @@
+---
+titulo: CloudWatch
+nombre_completo: Amazon CloudWatch
+icono: amazon-cloud-watch
+estado: listo
+en_una_frase: >-
+  Donde acaban las métricas y los logs de todo lo demás: un almacén que
+  envejece los datos agregándolos, y unas alarmas que solo saben mirar una
+  métrica cada una.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: Las métricas no caducan, se agregan
+    explicacion: >-
+      Un dato de un minuto vive 15 días con resolución de un minuto. Después
+      sigue existiendo, pero solo se puede leer agregado a 5 minutos; pasados 63
+      días, a una hora. No pierdes el dato: pierdes el detalle. Por eso una
+      investigación de hace tres meses nunca tendrá el grano que tuvo el
+      incidente.
+  - termino: Cada combinación de dimensiones es una métrica distinta
+    explicacion: >-
+      CloudWatch trata cada par nombre/valor como parte de la identidad de la
+      métrica, y solo puedes consultar las combinaciones que publicaste. Añadir
+      una dimensión con muchos valores —un id de usuario, por ejemplo— no
+      enriquece una métrica: crea miles, y cada una se factura.
+  - termino: Logs y métricas son dos mundos con dos facturas
+    explicacion: >-
+      Los logs se ingieren, se guardan y se consultan; las métricas se publican
+      y se agregan. El puente son los metric filters, que convierten patrones de
+      log en métricas. Confundirlos es la causa de casi todas las facturas
+      sorpresa de observabilidad.
+limites:
+  - concepto: Retención — datos de menos de 60 s
+    valor: 3 horas
+    tipo: hard
+    nota: Son las métricas personalizadas de alta resolución.
+  - concepto: Retención — datos de 60 s
+    valor: 15 días
+    tipo: hard
+  - concepto: Retención — datos de 300 s
+    valor: 63 días
+    tipo: hard
+  - concepto: Retención — datos de 3 600 s
+    valor: 455 días (15 meses)
+    tipo: hard
+  - concepto: Caducidad de una métrica sin datos nuevos
+    valor: 15 meses
+    tipo: hard
+    nota: Las métricas no se pueden borrar. Y sin datos en dos semanas dejan de salir en la consola y en list-metrics.
+  - concepto: Dimensiones por métrica
+    valor: 30
+    tipo: hard
+  - concepto: Antigüedad admitida de un timestamp
+    valor: hasta 2 semanas atrás · 2 horas adelante
+    tipo: hard
+    nota: Un timestamp fuera de rango deja la alarma en "Insufficient Data".
+  - concepto: Periodos válidos
+    valor: 1, 5, 10, 30 o múltiplos de 60 segundos
+    tipo: hard
+    nota: Los de menos de 60 s solo sirven en métricas de alta resolución.
+  - concepto: PutMetricData
+    valor: 500 por segundo
+    tipo: soft
+  - concepto: PutMetricAlarm
+    valor: 3 por segundo
+    tipo: soft
+    nota: Los despliegues que crean muchas alarmas a la vez se estrangulan aquí.
+  - concepto: Alarmas de Metrics Insights
+    valor: 200 por cuenta
+    tipo: hard
+  - concepto: Reglas de Contributor Insights
+    valor: 100
+    tipo: soft
+  - concepto: Logs · tamaño de un evento
+    valor: 1 024 KB
+    tipo: hard
+    nota: >-
+      El límite de 256 KB que circula por ahí está anticuado. El lote de
+      PutLogEvents sigue siendo de 1 MB.
+  - concepto: Logs · lote de PutLogEvents
+    valor: 1 MB
+    tipo: hard
+  - concepto: Logs · PutLogEvents por segundo
+    valor: 5 000
+    tipo: soft
+  - concepto: Logs · grupos por cuenta
+    valor: 1 000 000
+    tipo: soft
+  - concepto: Logs · filtros de métrica por grupo
+    valor: 100
+    tipo: hard
+  - concepto: Logs · filtros de suscripción por grupo
+    valor: 5
+    tipo: hard
+    nota: >-
+      Es el techo real del multi-destino: solo cinco consumidores por grupo
+      de logs.
+  - concepto: Logs · FilterLogEvents por segundo
+    valor: 25 en us-east-1 · 10 en la mayoría · 5 en varias
+    tipo: hard
+    nota: Fráncfort, Osaka, Yakarta, Calgary y Tel Aviv van a 5.
+  - concepto: Logs · Live Tail
+    valor: 15 sesiones concurrentes · 10 grupos por sesión
+    tipo: soft
+  - concepto: Logs · políticas de recursos
+    valor: 10 por cuenta y región
+    tipo: hard
+---
+
+import Caja from '../../components/Caja.astro';
+
+## Modelo mental
+
+CloudWatch no es un producto: son **dos servicios distintos con el mismo
+nombre**, y casi todos los problemas vienen de tratarlos como uno.
+
+**Métricas** es una serie temporal: publicas números, se agregan por periodos y
+se leen como estadísticas. **Logs** es un almacén de texto: ingieres líneas, se
+guardan y se consultan. Facturan distinto, escalan distinto y se rompen
+distinto. El único puente entre ambos son los *metric filters*, que buscan un
+patrón en los logs y publican una métrica cuando lo encuentran.
+
+### Envejecer no es caducar
+
+Es el concepto que más gente descubre tarde, en mitad de una investigación:
+
+| Resolución del dato | Cuánto vive así |
+| --- | --- |
+| menos de 60 s (alta resolución) | 3 horas |
+| 60 s | 15 días |
+| 300 s (5 min) | 63 días |
+| 3 600 s (1 hora) | 455 días (15 meses) |
+
+Y lo importante es cómo transiciona: un dato publicado por minuto **sigue
+existiendo** pasados 15 días, pero solo se puede leer agregado a 5 minutos.
+Pasados 63 días, a una hora.
+
+Traducido: **el pico de 30 segundos que causó el incidente del trimestre pasado
+ya no existe**. Existe la media de la hora en la que ocurrió, que no dice nada.
+Si un dato va a hacer falta con grano fino más adelante, sácalo de CloudWatch a
+tiempo.
+
+### La dimensión que multiplica la factura
+
+CloudWatch trata **cada combinación única de dimensiones como una métrica
+separada**, aunque el nombre sea el mismo. Y solo puedes consultar las
+combinaciones que publicaste: si mandaste `Server=Prod,Domain=Frankfurt` no
+puedes preguntar por `Server=Prod` a secas.
+
+De ahí sale el error caro: añadir una dimensión de alta cardinalidad
+—`usuarioId`, `pedidoId`— no enriquece una métrica. **Crea una métrica por cada
+valor**, y cada métrica personalizada se factura. Es la vía más rápida a una
+factura de observabilidad que nadie sabe explicar.
+
+Para eso están los logs y Contributor Insights, no las dimensiones.
+
+<Caja tipo="clave" titulo="Las métricas que cita el resto del catálogo">
+Casi todas las fichas terminan diciendo "vigila esta métrica". Aquí están
+juntas:
+
+| Métrica | Servicio | Qué te dice |
+| --- | --- | --- |
+| `NumberOfNotificationsFailed` | SNS | La suscripción no puede entregar — casi siempre, permisos |
+| `ApproximateNumberOfMessagesVisible` | SQS | Profundidad de la cola, y **de la DLQ** |
+| `ApproximateAgeOfOldestMessage` | SQS | Cuánto lleva esperando el más viejo |
+| `ConcurrentExecutions` | Lambda | Lo que de verdad consumes del bote de la cuenta |
+| `Throttles` | Lambda | Estás tocando un techo, tuyo o de la cuenta |
+| `Init Duration` | Lambda | El tramo del arranque en frío que sí puedes acortar |
+| `IteratorAge` | Kinesis y DynamoDB Streams | Cuánto se ha quedado atrás tu consumidor |
+| `TransactionConflict` | DynamoDB | Transacciones que chocan entre sí |
+| `ExecutionThrottled` | Step Functions | Transiciones de estado estranguladas |
+
+Ninguna de ellas sirve sin alarma. Una métrica que nadie mira es un gráfico
+bonito.
+</Caja>
+
+## Cómo te factura
+
+| Concepto | Cómo se paga |
+| --- | --- |
+| Métricas personalizadas | por métrica y mes |
+| `PutMetricData` | por millón de peticiones |
+| Alarmas | por alarma y mes, y **más caras** las de alta resolución |
+| Logs · ingesta | **por GB ingerido** — la línea dominante |
+| Logs · almacenamiento | por GB y mes |
+| Logs Insights | **por GB escaneado** en cada consulta |
+
+Dos cosas dominan la factura y ninguna es la que la gente vigila:
+
+**La ingesta de logs.** Se paga por GB que entra, no por GB que consultas. Un
+`console.log` por invocación en una función con cien millones de invocaciones al
+mes es una decisión de coste, no de estilo.
+
+**Logs Insights cobra por GB escaneado.** Una consulta sin filtrar sobre un mes
+de logs escanea —y factura— el mes entero, aunque devuelva tres líneas. Acota
+siempre el rango temporal y el grupo de logs antes de filtrar por contenido.
+
+Y una que sorprende: **las métricas de alta resolución multiplican todo**. Cada
+`PutMetricData` se cobra, así que publicar cada segundo cuesta sesenta veces más
+que publicar cada minuto, y las alarmas de 10 o 30 segundos tienen tarifa
+propia.
+
+## Cuándo NO usarlo
+
+- **Como base de datos de series temporales.** La retención de 15 meses es
+  agregada; para análisis histórico con grano fino, exporta.
+- **Para trazas distribuidas.** Ver cómo una petición atraviesa cinco servicios
+  es X-Ray, no logs correlacionados a mano.
+- **Para consultas exploratorias frecuentes.** Logs Insights cobra por GB
+  escaneado; si vas a hacer veinte consultas al día sobre el mismo mes, sale
+  más barato exportar a S3 y usar Athena.
+- **Para métricas de negocio de alta cardinalidad.** Un contador por usuario no
+  es una métrica: son miles de métricas.
+
+## Errores comunes
+
+**Meter identificadores en las dimensiones.** Multiplica el número de métricas y
+la factura, y además ninguna de esas métricas se puede agregar después.
+
+**Creer que el dato de hace tres meses conserva el detalle.** Está agregado a
+una hora. Lo que necesitabas ver ya no está.
+
+**No poner retención a los grupos de logs.** Por defecto los logs **no
+caducan**: se guardan y se facturan para siempre. Es la línea de factura más
+común y la más fácil de arreglar.
+
+**Consultar en Logs Insights sin acotar.** Filtra primero por grupo y por
+tiempo; el `filter` por contenido se aplica sobre lo que ya escaneaste y pagaste.
+
+**Suponer que caben cinco destinos y luego seis.** Los filtros de suscripción
+por grupo de logs son **5**, y no se amplían. Es el techo real cuando quieres
+mandar los mismos logs a varios sitios.
+
+**Alarmas sobre una métrica que a veces no existe.** Si una métrica deja de
+publicarse, la alarma se queda en `Insufficient Data` en vez de dispararse.
+Configura `treatMissingData` a conciencia — sobre todo en las alarmas de DLQ,
+que precisamente vigilan algo que casi siempre está vacío.
+
+**Desplegar cien alarmas de golpe.** `PutMetricAlarm` va a 3 por segundo.
+
+## Fuentes
+
+Retención por resolución, agregación al envejecer, caducidad a los 15 meses,
+dimensiones por métrica, rango admitido de timestamps, periodos válidos y
+comportamiento de las alarmas:
+[Metrics concepts — Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html).
+Límites de API de métricas y alarmas:
+[CloudWatch service quotas](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_limits.html).
+Tamaño de evento, lote de `PutLogEvents`, grupos por cuenta, filtros de métrica
+y de suscripción, `FilterLogEvents` por región y Live Tail:
+[CloudWatch Logs quotas](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/cloudwatch_limits_cwl.html).
+Los modelos de precio proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente.

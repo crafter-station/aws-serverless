@@ -100,6 +100,9 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
   documentación oficial de AWS, no contra blogs.
 - **Relaciones bidireccionales.** Si A dice que se combina con B, B menciona a A.
   El build detecta las huérfanas.
+- **Ningún escalar de YAML sin comillas puede contener ": ".** Rompe el build
+  con un "bad indentation" que no menciona la causa. Usa `>-` siempre que el
+  texto lleve dos puntos seguidos de espacio.
 - **Los iconos de AWS no se tocan.** Nunca. Ni el color, ni la forma, ni el recorte.
 - **Cada laboratorio incluye `cdk destroy`** y su coste estimado en reposo.
 

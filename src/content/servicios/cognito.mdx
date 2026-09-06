@@ -1,0 +1,212 @@
+---
+titulo: Cognito
+nombre_completo: Amazon Cognito
+icono: amazon-cognito
+estado: listo
+en_una_frase: >-
+  Autenticación gestionada que emite tokens JWT y te ahorra guardar contraseñas,
+  a cambio de un esquema de usuario casi inmutable y una factura que crece por
+  usuario activo.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: User pools e identity pools no son lo mismo
+    explicacion: >-
+      Un user pool es un directorio: registra usuarios, valida contraseñas y
+      emite tokens JWT que tu API verifica. Un identity pool cambia una
+      identidad por credenciales temporales de AWS para hablar directamente con
+      S3 o DynamoDB. La mayoría de proyectos solo necesita el primero, y muchos
+      montan el segundo sin saber por qué.
+  - termino: Se factura por usuario activo mensual
+    explicacion: >-
+      No por peticiones ni por almacenamiento: por MAU. Un usuario cuenta si en
+      el mes hay una operación de identidad suya — alta, confirmación, inicio de
+      sesión o respuesta a un desafío. La importación por CSV, según AWS, no
+      cuenta. Eso hace la factura muy predecible y muy dependiente de tu
+      producto, no de tu tráfico.
+  - termino: El esquema de atributos es casi inmutable
+    explicacion: >-
+      Son 50 atributos personalizados por user pool, con nombres de 20
+      caracteres, y ese límite no se amplía. Añadir campos al perfil sin
+      planificarlo lleva a un pool que no se puede evolucionar y a una migración
+      de usuarios, que es de las cosas más incómodas que existen.
+limites:
+  - concepto: Emails diarios por cuenta con el email por defecto
+    valor: 50
+    tipo: hard
+    nota: >-
+      La trampa número uno. Solo aplica al email integrado; configurando SES el
+      límite pasa a ser el de SES.
+  - concepto: Atributos personalizados por user pool
+    valor: 50
+    tipo: hard
+    nota: Con nombres de 20 caracteres como mucho, y 2 048 bytes por valor.
+  - concepto: Usuarios por user pool
+    valor: 40 000 000
+    tipo: soft
+  - concepto: User pools por región
+    valor: 1 000 · ampliable a 10 000
+    tipo: soft
+  - concepto: App clients por user pool
+    valor: 1 000 · ampliable a 10 000
+    tipo: soft
+  - concepto: Proveedores de identidad por user pool
+    valor: 300 · ampliable a 1 000
+    tipo: soft
+  - concepto: Resource servers por user pool
+    valor: 25 · ampliable a 300
+    tipo: soft
+  - concepto: Dominios personalizados por región
+    valor: 4
+    tipo: hard
+  - concepto: Grupos por user pool
+    valor: 10 000 · 100 grupos por usuario
+    tipo: hard
+  - concepto: URLs de callback y de logout por app client
+    valor: 100 de cada
+    tipo: hard
+  - concepto: Scopes
+    valor: 50 por app client · 100 por resource server
+    tipo: hard
+  - concepto: Identidades federadas enlazadas a un usuario
+    valor: 5
+    tipo: hard
+  - concepto: Autenticadores WebAuthn (passkeys) por usuario
+    valor: 20
+    tipo: hard
+  - concepto: Longitud de la contraseña
+    valor: 256 caracteres · mínimo configurable de 6 a 99
+    tipo: hard
+  - concepto: Caracteres en una respuesta SAML
+    valor: 100 000
+    tipo: hard
+  - concepto: Cambios en el trigger de pre token generation
+    valor: 5 000 claims y scopes combinados
+    tipo: soft
+  - concepto: Ritmo de UserCreation
+    valor: 50 peticiones/s combinadas
+    tipo: soft
+    nota: SignUp, ConfirmSignUp, AdminCreateUser y AdminConfirmSignUp comparten cuota.
+  - concepto: RespondToAuthChallenge
+    valor: 3× la cuota de UserAuthentication
+    tipo: soft
+    nota: >-
+      Si el pool pide varios desafíos por inicio de sesión, el exceso se suma a
+      la cuota de UserAuthentication y te estrangula antes de lo esperado.
+---
+
+import Caja from '../../components/Caja.astro';
+
+## Modelo mental
+
+Cognito es **dos productos con un nombre**, y elegir el equivocado es el primer
+error del servicio:
+
+| | User pool | Identity pool |
+| --- | --- | --- |
+| Qué es | un directorio de usuarios | un intercambiador de credenciales |
+| Qué te da | tokens JWT | credenciales temporales de AWS |
+| Para qué | que tu API sepa quién llama | que el cliente hable con S3 o DynamoDB directamente |
+| Lo necesitas si | tienes usuarios | el navegador va a firmar peticiones a AWS |
+
+La mayoría de las aplicaciones **solo necesitan un user pool**: el usuario se
+autentica, recibe un JWT, y API Gateway lo valida con un autorizador. El identity
+pool solo hace falta cuando el cliente tiene que llamar a un servicio de AWS
+directamente — y suele ser mejor evitarlo, porque reparte permisos de AWS a
+navegadores.
+
+### La factura no depende de tu tráfico
+
+Cognito cobra por **usuario activo mensual**. Un usuario cuenta si en el mes hay
+una operación de identidad suya: alta, confirmación, inicio de sesión o respuesta
+a un desafío. Las operaciones que autorizas con un token de acceso ya emitido no
+suman.
+
+Eso tiene dos consecuencias prácticas: la factura es **muy predecible** —crece
+con tu producto, no con tus picos— y es indiferente a que un usuario entre una
+vez o mil. La importación masiva por CSV, además, no cuenta como actividad.
+
+### El esquema que no se puede rehacer
+
+Un user pool admite **50 atributos personalizados**, con nombres de **20
+caracteres**, y ese límite **no se amplía**. Sumado a que evolucionar el esquema
+de un pool en producción es incómodo, la conclusión práctica es clara: **guarda
+en Cognito lo mínimo para autenticar** —identificador, email, poco más— y el
+perfil de usuario en tu propia base de datos, donde puedes cambiarlo.
+
+## Cómo te factura
+
+| Concepto | Cómo se paga |
+| --- | --- |
+| Usuarios activos mensuales | por MAU, con tramos decrecientes |
+| MAU federados con SAML/OIDC | tarifa propia, más cara |
+| Capa gratuita | un número generoso de MAU al mes |
+| SMS para MFA | aparte, y no es barato |
+
+La regla mental: **pagas por personas, no por peticiones**. Es de los pocos
+servicios de AWS donde eso es cierto, y hace que el coste sea fácil de proyectar
+desde el plan de negocio en vez de desde la arquitectura.
+
+Los MAU **federados con SAML u OIDC** —el caso empresarial— tienen tarifa propia
+y bastante más alta. Si vendes a empresas con SSO, esa línea es la que crece.
+
+## Cuándo NO usarlo
+
+- **Necesitas control fino sobre el flujo de autenticación.** Cognito es
+  configurable dentro de sus carriles; salirse de ellos significa pelearse con
+  triggers Lambda para cosas que en otro proveedor son una casilla.
+- **El perfil de usuario es rico y cambia.** Cincuenta atributos con nombres de
+  veinte caracteres no dan para un dominio de verdad.
+- **Ya tienes un directorio.** Si la fuente de verdad es otra, Cognito añade una
+  copia que hay que sincronizar.
+- **Te importa mucho la experiencia de la UI alojada.** Es funcional y
+  personalizable hasta cierto punto; si el registro es parte del producto,
+  probablemente quieras construirlo tú.
+- **Necesitas enviar muchos correos transaccionales.** El email integrado son
+  **50 al día por cuenta**. Con SES configurado deja de ser problema, pero hay
+  que hacerlo a conciencia.
+
+## Errores comunes
+
+<Caja tipo="trampa" titulo="50 correos al día, y en producción">
+Es el error que se lleva a más gente por delante, y no falla en desarrollo:
+funciona perfectamente con cinco usuarios de prueba. El día del lanzamiento, el
+usuario número 51 no recibe su código de verificación y **no hay error visible en
+tu aplicación**.
+
+El límite es del **email integrado** de Cognito y es duro. La solución es
+configurar el user pool para enviar con **Amazon SES** — y conviene hacerlo desde
+el primer día, no cuando se rompa.
+</Caja>
+
+**Meter el perfil de usuario en Cognito.** Los 50 atributos personalizados y los
+20 caracteres de nombre se agotan antes de lo que parece, y el esquema no es
+fácil de evolucionar. Cognito para autenticar, tu base de datos para el perfil.
+
+**Montar un identity pool sin necesitarlo.** Si tu cliente llama a tu API y tu
+API llama a AWS, no hace falta. El identity pool reparte credenciales de AWS al
+navegador, que es una superficie que casi nadie quiere gestionar.
+
+**Ignorar el desafío múltiple.** `RespondToAuthChallenge` tiene una cuota de
+**tres veces** la de `UserAuthentication`. Si tu pool pide MFA más
+autenticación de dispositivo, cada inicio de sesión gasta varias respuestas, y el
+exceso **se suma a la cuota de autenticación** y estrangula antes de lo que
+sugieren los números sueltos.
+
+**Validar el token llamando a Cognito.** Un JWT se verifica localmente con las
+claves públicas del pool. Llamar al servicio en cada petición añade latencia y
+consume cuota sin ninguna necesidad.
+
+**Olvidar los 4 dominios personalizados por región.** En una cuenta con varios
+entornos, ese número se alcanza antes de lo esperado.
+
+## Fuentes
+
+Atributos personalizados, longitud de nombres y valores, usuarios y user pools,
+app clients, proveedores de identidad, resource servers, dominios personalizados,
+grupos, URLs de callback, scopes, identidades enlazadas, passkeys, contraseñas,
+respuestas SAML, límite de 50 correos diarios y cuotas por categoría de
+operación, incluido el factor 3× de `RespondToAuthChallenge`:
+[Quotas in Amazon Cognito](https://docs.aws.amazon.com/cognito/latest/developerguide/limits.html).
+La definición de usuario activo mensual y qué operaciones cuentan procede de esa
+misma página. Los importes proceden de la página de precios de AWS, que se
+renderiza dinámicamente y no pudo citarse literalmente.

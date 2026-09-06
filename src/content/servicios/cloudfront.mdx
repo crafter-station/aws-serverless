@@ -1,0 +1,215 @@
+---
+titulo: CloudFront
+nombre_completo: Amazon CloudFront
+icono: amazon-cloud-front
+estado: listo
+en_una_frase: >-
+  La red de caché que se pone delante de todo lo demás: acerca el contenido al
+  usuario, absorbe el tráfico que tu origen no tendría por qué ver, y decide su
+  utilidad con una sola cosa — la clave de caché.
+verificado_en: "2026-09-06"
+los_3_conceptos:
+  - termino: La clave de caché lo decide todo
+    explicacion: >-
+      CloudFront guarda una copia por cada combinación distinta de lo que
+      incluyes en la clave: ruta, y las cabeceras, cookies y query strings que
+      declares. Cada elemento que añades multiplica las variantes y divide tu
+      tasa de acierto. Reenviar todas las cookies al origen es, en la práctica,
+      desactivar la caché.
+  - termino: Invalidar es el último recurso
+    explicacion: >-
+      Se puede, pero está limitado a 150 rutas por segundo y una invalidación
+      con comodín por segundo, y no es instantáneo. La forma correcta de
+      publicar contenido nuevo es cambiar el nombre del archivo — un hash en la
+      ruta — para que la URL nueva no tenga nada que invalidar.
+  - termino: Es el sitio más barato para ejecutar lógica
+    explicacion: >-
+      CloudFront Functions corre en el edge con 10 KB de código y 2 MB de
+      memoria, para reescribir URLs, cabeceras y redirecciones. Lambda@Edge es
+      su hermano grande — 30 segundos de timeout, acceso a la red— y cuesta
+      bastante más. Casi todo lo que se pone en Lambda@Edge cabe en una Function.
+limites:
+  - concepto: Peticiones por segundo y distribución
+    valor: 250 000
+    tipo: soft
+  - concepto: Transferencia por distribución
+    valor: 150 Gbps
+    tipo: soft
+  - concepto: Distribuciones por cuenta
+    valor: 500
+    tipo: soft
+  - concepto: Nombres de dominio alternativos (CNAME) por distribución
+    valor: 100
+    tipo: soft
+  - concepto: Cache behaviors por distribución
+    valor: 75
+    tipo: soft
+  - concepto: Orígenes por distribución
+    valor: 100 · 10 grupos de origen
+    tipo: soft
+  - concepto: Timeout de respuesta del origen
+    valor: de 1 a 120 segundos
+    tipo: soft
+    nota: También llamado origin read timeout. La conexión va de 1 a 10 s.
+  - concepto: Archivo cacheable máximo
+    valor: 50 GB
+    tipo: hard
+    nota: Solo se cachean respuestas a GET. Las de POST y PUT nunca.
+  - concepto: Cuerpo de petición máximo
+    valor: 64 GB
+    tipo: hard
+  - concepto: Longitud de la petición sin cuerpo
+    valor: 32 768 bytes
+    tipo: hard
+    nota: Cabeceras y query strings sumadas. La URL sola, 8 192 bytes.
+  - concepto: Rango de compresión
+    valor: de 1 000 a 10 000 000 bytes
+    tipo: hard
+    nota: Fuera de ese rango CloudFront no comprime, aunque se lo pidas.
+  - concepto: Invalidaciones
+    valor: 150 rutas o tags por segundo · 1 comodín por segundo
+    tipo: hard
+  - concepto: Distribuciones encadenadas
+    valor: 2
+    tipo: hard
+    nota: Poner una distribución delante de otra más allá de eso devuelve 403.
+  - concepto: CloudFront Functions
+    valor: 10 KB de código · 2 MB de memoria · 100 por cuenta
+    tipo: hard
+    nota: El tamaño no se amplía. Para más datos, un key value store.
+  - concepto: Lambda@Edge · timeout
+    valor: 30 segundos
+    tipo: hard
+  - concepto: Lambda@Edge · respuesta generada
+    valor: 40 KB en viewer · 1 MB en origin
+    tipo: hard
+  - concepto: Cabeceras, cookies y query strings por política de caché
+    valor: 10 de cada
+    tipo: soft
+    nota: Y 1 024 caracteres sumando todos los nombres.
+  - concepto: Políticas de caché o de origin request personalizadas
+    valor: 20 por cuenta
+    tipo: soft
+  - concepto: Certificados SSL por distribución
+    valor: 1
+    tipo: hard
+  - concepto: Timeout de inactividad en WebSocket
+    valor: 10 minutos
+    tipo: hard
+---
+
+import Caja from '../../components/Caja.astro';
+
+## Modelo mental
+
+CloudFront es **una caché con cientos de sedes**. Un usuario de Lima pide un
+archivo, la sede más cercana mira si lo tiene, y si lo tiene se lo da sin que tu
+origen se entere de que ha existido esa petición.
+
+Todo el servicio se reduce a esa pregunta —*¿lo tengo?*— y la respuesta la
+decide **la clave de caché**.
+
+### La clave de caché es el servicio
+
+La clave se construye con la ruta más **lo que tú declares**: cabeceras,
+cookies, query strings. Y CloudFront guarda **una copia por cada combinación
+distinta**.
+
+Un ejemplo hace la aritmética evidente. Si incluyes en la clave la cabecera
+`Accept-Language` (20 valores plausibles), una cookie de sesión (un valor por
+usuario) y dos query strings de paginación, no tienes una caché: tienes tantas
+copias como usuarios, y **la tasa de acierto tiende a cero**. Cada petición viaja
+al origen igual que antes, pero ahora pagando CloudFront además.
+
+De ahí la regla que resume el servicio: **cuanto menos incluyas en la clave, más
+sirve**. Y por eso conviene separar dos cosas que la gente confunde:
+
+- La **política de caché** define la clave — lo que hace variar la copia.
+- La **política de origin request** define qué se le manda al origen sin formar
+  parte de la clave.
+
+Si tu origen necesita ver una cabecera pero esa cabecera no debería crear
+variantes, va en la segunda, no en la primera.
+
+### No invalides: versiona
+
+Invalidar existe, funciona y es la respuesta equivocada casi siempre. Está
+limitado a **150 rutas por segundo** y **una invalidación con comodín por
+segundo**, y tarda en propagarse.
+
+La alternativa es no tener nada que invalidar: si el archivo nuevo se llama
+`app.9f2c1a.js`, es una URL que nunca ha estado en caché y la vieja puede seguir
+donde estaba hasta que caduque. Es lo que hace cualquier bundler moderno, y es
+la razón por la que puede.
+
+## Cómo te factura
+
+| Concepto | Cómo se paga |
+| --- | --- |
+| Transferencia de salida | por GB, **y varía por región geográfica** |
+| Peticiones | por 10 000, HTTP y HTTPS por separado |
+| Invalidaciones | las primeras 1 000 rutas al mes gratis, luego por ruta |
+| CloudFront Functions | por invocación, **muy barato** |
+| Lambda@Edge | por petición y por duración, bastante más caro |
+
+La razón económica principal para poner CloudFront delante de S3 no es la
+latencia: es que **la salida de datos desde CloudFront cuesta menos que desde S3**
+y, sobre todo, que las peticiones que sirve la caché **no llegan a tu origen** —
+así que no pagas ni la petición de S3, ni la invocación de Lambda, ni la
+transferencia.
+
+Con una tasa de acierto alta, CloudFront se paga solo. Con una tasa de acierto
+baja —por una clave de caché mal diseñada— es un coste añadido sin
+contrapartida. La métrica que importa es esa, y hay que mirarla.
+
+## Cuándo NO usarlo
+
+- **Todo el contenido es personalizado y no cacheable.** Si cada respuesta es
+  distinta por usuario, no hay nada que cachear: estás pagando un salto de red
+  extra. Puede seguir mereciendo la pena por TLS terminado en el edge y por
+  protección, pero no lo vendas como caché.
+- **La API es interna y sus clientes están en la misma región.** El edge no
+  acerca nada si el usuario ya estaba cerca.
+- **Necesitas WebSockets de muy larga duración.** El timeout de inactividad son
+  10 minutos.
+- **Tu contenido cambia cada pocos segundos y no puedes versionar el nombre.**
+  Vas a vivir invalidando, que es justo lo que el servicio hace peor.
+
+## Errores comunes
+
+**Reenviar todas las cookies o todas las cabeceras.** Es la forma más rápida de
+desactivar la caché sin darse cuenta. Cada valor distinto es una copia distinta.
+
+**Confundir política de caché con política de origin request.** Lo que el origen
+necesita ver y lo que debe crear variantes son dos listas diferentes.
+
+**Invalidar en cada despliegue.** Además de lento y limitado, oculta el problema
+real: los nombres de archivo no llevan versión.
+
+**Dejar el bucket público "porque hay CloudFront delante".** La configuración
+correcta es *Origin Access Control*: el bucket privado y solo CloudFront con
+permiso. Si no, el bucket sigue siendo accesible directamente y toda la caché es
+opcional para quien conozca la URL.
+
+**Esperar que se cacheen los POST.** Solo se cachean respuestas a `GET`.
+
+**Suponer que comprime siempre.** CloudFront comprime en el rango de **1 000 a
+10 000 000 bytes**. Un archivo de 400 bytes o de 20 MB viaja sin comprimir.
+
+**Encadenar distribuciones.** El máximo son **2** en la cadena hasta el origen;
+pasarse devuelve `403`.
+
+**Ir a Lambda@Edge para reescribir una URL.** Eso cabe en una CloudFront
+Function, que cuesta una fracción y se ejecuta en el edge sin arrancar nada. Los
+10 KB de código dan para mucho más de lo que parece.
+
+## Fuentes
+
+Peticiones por segundo, transferencia, distribuciones, CNAMEs, cache behaviors,
+orígenes, timeouts, tamaño máximo cacheable, longitud de petición y URL, rango
+de compresión, límites de invalidación, distribuciones encadenadas, CloudFront
+Functions, Lambda@Edge, políticas de caché y de origin request, certificados y
+timeout de WebSocket:
+[Quotas — Amazon CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-limits.html).
+Los modelos de precio proceden de la página de precios de AWS, que se renderiza
+dinámicamente y no pudo citarse literalmente.
