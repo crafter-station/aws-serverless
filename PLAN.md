@@ -108,11 +108,18 @@ información desperdigada en veinte páginas y decide arquitecturas enteras.
 ## Estado
 
 - [x] 1. Scaffold Astro + MDX + `@aws-icons/astro`
-- [ ] 2. Ficha **fan-out** completa: prosa, diagrama, primitivas visuales
+- [x] 2. Ficha **fan-out** completa: prosa, 2 diagramas, 6 primitivas visuales
 - [ ] 3. Extraer el sistema: esquemas Zod, plantillas, checks de build
-- [ ] 4. Desplegar en `aws.crafter.run`
+- [x] 4. Desplegar en [`aws.crafter.run`](https://aws.crafter.run)
 - [ ] 5. Llenar: 6 servicios + 7 patrones restantes
 - [ ] 6. Umbral de mostrar: 4 servicios + 3 patrones
+
+### Despliegue
+
+Compose en Dokploy (`crafter-station/aws-serverless` → `docker-compose.yaml` →
+Dockerfile multi-etapa: Node compila, nginx sirve). Se usa la ruta de **compose**
+y no la de app porque el endpoint `application.saveBuildType` de este Dokploy
+rechaza `buildType: dockerfile` con un error de validación sobre `herokuVersion`.
 
 ---
 
